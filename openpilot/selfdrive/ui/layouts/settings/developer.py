@@ -82,6 +82,13 @@ class DeveloperLayout(Widget):
       enabled=lambda: not ui_state.engaged,
     )
 
+    self._separate_lat_long_toggle = toggle_item(
+      lambda: tr("Separate Lateral/Longitudinal Control"),
+      description="Use the ALA stalk button to toggle lateral control and the cruise buttons to toggle longitudinal control independently.",
+      initial_state=self._params.get_bool("SeparateLatLongControl"),
+      callback=self._on_separate_lat_long,
+    )
+
     self._ui_debug_toggle = toggle_item(
       lambda: tr("UI Debug Mode"),
       description="",
@@ -98,6 +105,7 @@ class DeveloperLayout(Widget):
       self._long_maneuver_toggle,
       self._lat_maneuver_toggle,
       self._alpha_long_toggle,
+      self._separate_lat_long_toggle,
       self._ui_debug_toggle,
     ], line_separator=True, spacing=0)
 
@@ -117,7 +125,7 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
@@ -146,6 +154,7 @@ class DeveloperLayout(Widget):
       ("LongitudinalManeuverMode", self._long_maneuver_toggle),
       ("LateralManeuverMode", self._lat_maneuver_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
+      ("SeparateLatLongControl", self._separate_lat_long_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
     ):
       item.action_item.set_state(self._params.get_bool(key))
@@ -204,3 +213,8 @@ class DeveloperLayout(Widget):
       self._params.put_bool("AlphaLongitudinalEnabled", False, block=True)
       self._params.put_bool("OnroadCycleRequested", True, block=True)
       self._update_toggles()
+
+  def _on_separate_lat_long(self, state: bool):
+    self._params.put_bool("SeparateLatLongControl", state, block=True)
+    self._params.put_bool("OnroadCycleRequested", True, block=True)
+    self._update_toggles()

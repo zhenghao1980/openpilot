@@ -133,6 +133,14 @@ class SelfdriveD:
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+    # Separate lateral/longitudinal control state
+    self.separate_lat_long = self.params.get_bool("SeparateLatLongControl")
+    self.lat_enabled = False
+    self.long_enabled = False
+    self.lat_wanted = False
+    self.long_wanted = False
+    self.enabled_prev = False
+
     # Determine startup event
     self.startup_event = EventName.startup if build_metadata.openpilot.comma_remote and build_metadata.tested_channel else EventName.startupMaster
     if HARDWARE.get_device_type() == 'mici':
@@ -527,6 +535,8 @@ class SelfdriveD:
     ss = ss_msg.selfdriveState
     ss.enabled = self.enabled
     ss.active = self.active
+    ss.latEnabled = self.lat_enabled
+    ss.longEnabled = self.long_enabled
     ss.state = self.state_machine.state
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
@@ -555,11 +565,57 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+      self._update_separate_lat_long(CS)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
 
     self.CS_prev = CS
+
+  def _update_separate_lat_long(self, CS):
+    """Manage separate lateral/longitudinal enable toggles when SeparateLatLongControl is enabled.
+
+    Stock behavior: any enable button turns on both lateral and longitudinal together.
+    Separate mode:
+      - ALA (lkas) button toggles lateral on/off.
+      - SET/Resume buttons toggle longitudinal on.
+      - Cancel button disables both lateral and longitudinal.
+      - Safety disengagements (brake, door, etc.) reset both toggles.
+    """
+    if not self.separate_lat_long:
+      self.lat_enabled = self.enabled
+      self.long_enabled = self.enabled
+      self.lat_wanted = self.enabled
+      self.long_wanted = self.enabled
+      return
+
+    # Detect falling edge of overall enable due to safety/user disable
+    if not self.enabled and self.enabled_prev:
+      self.lat_wanted = False
+      self.long_wanted = False
+
+    # Process user button inputs
+    for be in CS.buttonEvents:
+      if be.type == ButtonType.lkas:
+        if be.pressed:
+          self.lat_wanted = not self.lat_wanted
+          if self.lat_wanted and not self.enabled:
+            self.events.add(EventName.buttonEnable)
+      elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
+        self.long_wanted = True
+        if not self.enabled:
+          self.events.add(EventName.buttonEnable)
+      elif be.type == ButtonType.cancel and be.pressed:
+        self.lat_wanted = False
+        self.long_wanted = False
+
+    # Re-run state machine in case we injected buttonEnable for lateral-only or long-only engagement
+    if self.events.contains(ET.ENABLE) and not self.enabled:
+      self.enabled, self.active = self.state_machine.update(self.events)
+
+    self.lat_enabled = self.enabled and self.lat_wanted
+    self.long_enabled = self.enabled and self.long_wanted
+    self.enabled_prev = self.enabled
 
   def params_thread(self, evt):
     while not evt.is_set():
@@ -568,6 +624,7 @@ class SelfdriveD:
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
+      self.separate_lat_long = self.params.get_bool("SeparateLatLongControl")
       time.sleep(0.1)
 
   def run(self):

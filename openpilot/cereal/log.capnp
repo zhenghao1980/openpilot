@@ -822,6 +822,10 @@ struct SelfdriveState {
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
 
+  # separate lateral/longitudinal enable flags (used when SeparateLatLongControl is enabled)
+  latEnabled @14 :Bool;
+  longEnabled @15 :Bool;
+
   enum AudibleAlert {
     none @0;
 
