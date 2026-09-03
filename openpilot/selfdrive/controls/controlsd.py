@@ -40,7 +40,7 @@ class Controls:
 
     self.sm = messaging.SubMaster(['lateralDelay', 'vehicleParameters', 'lateralTorqueParameters', 'modelV2', 'selfdriveState',
                                    'extrinsicsCalibration', 'deviceMotion', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
-                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
+                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'pandaStates'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
     self.steer_limited_by_safety = False
@@ -98,9 +98,16 @@ class Controls:
     # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
     ss = self.sm['selfdriveState']
-    CC.latActive = ss.latEnabled and ss.active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
+    # Never send active control frames while panda is not allowing: blocked active
+    # HCA_01/ACC_01 frames cause CAN counter discontinuities that permanently fault
+    # the EPS/ACC ECUs. Panda states publish at 10Hz, adding at most ~100ms of
+    # engagement latency.
+    IGNORED_SAFETY = (car.CarParams.SafetyModel.silent, car.CarParams.SafetyModel.noOutput)
+    pandas_allowed = len(self.sm['pandaStates']) == 0 or \
+                     all(ps.controlsAllowed for ps in self.sm['pandaStates'] if ps.safetyModel not in IGNORED_SAFETY)
+    CC.latActive = pandas_allowed and ss.latEnabled and ss.active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
-    CC.longActive = ss.longEnabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+    CC.longActive = pandas_allowed and ss.longEnabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
