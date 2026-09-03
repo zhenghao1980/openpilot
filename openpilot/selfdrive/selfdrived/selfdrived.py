@@ -597,7 +597,10 @@ class SelfdriveD:
     # Process user button inputs
     for be in CS.buttonEvents:
       if be.type == ButtonType.lkas:
-        if be.pressed:
+        # Toggle on falling edge to match panda safety, which sets controls_allowed
+        # on ALA release. Enabling on press would send active HCA_01 while panda
+        # still blocks it, causing counter gaps and a permanent EPS fault.
+        if not be.pressed:
           self.lat_wanted = not self.lat_wanted
           if self.lat_wanted and not self.enabled:
             self.events.add(EventName.buttonEnable)
