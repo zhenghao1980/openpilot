@@ -103,7 +103,7 @@ class Controls:
     # the EPS/ACC ECUs. Panda states publish at 10Hz, adding at most ~100ms of
     # engagement latency.
     IGNORED_SAFETY = (car.CarParams.SafetyModel.silent, car.CarParams.SafetyModel.noOutput)
-    pandas_allowed = len(self.sm['pandaStates']) == 0 or \
+    pandas_allowed = self.sm.valid['pandaStates'] and \
                      all(ps.controlsAllowed for ps in self.sm['pandaStates'] if ps.safetyModel not in IGNORED_SAFETY)
     CC.latActive = pandas_allowed and ss.latEnabled and ss.active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)

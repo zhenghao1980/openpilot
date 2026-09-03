@@ -87,6 +87,7 @@ class DeveloperLayout(Widget):
       description="Use the ALA stalk button to toggle lateral control and the cruise buttons to toggle longitudinal control independently.",
       initial_state=self._params.get_bool("SeparateLatLongControl"),
       callback=self._on_separate_lat_long,
+      enabled=lambda: not ui_state.engaged,
     )
 
     self._ui_debug_toggle = toggle_item(

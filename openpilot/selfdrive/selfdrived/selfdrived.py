@@ -135,6 +135,9 @@ class SelfdriveD:
 
     # Separate lateral/longitudinal control state
     self.separate_lat_long = self.params.get_bool("SeparateLatLongControl")
+    # Latched copy: mode changes only take effect while disengaged, so toggling
+    # the setting mid-drive can not alter the active control behavior
+    self.separate_lat_long_active = self.separate_lat_long
     self.lat_enabled = False
     self.long_enabled = False
     self.lat_wanted = False
@@ -245,7 +248,7 @@ class SelfdriveD:
 
     # Add car events, ignore if CAN isn't valid
     if CS.canValid:
-      self.car_events.separate_lat_long = self.separate_lat_long
+      self.car_events.separate_lat_long = self.separate_lat_long_active
       car_events = self.car_events.update(CS, self.CS_prev, self.sm['carControl']).to_msg()
       self.events.add_from_msg(car_events)
 
@@ -587,9 +590,15 @@ class SelfdriveD:
       - ALA (lkas) button toggles lateral on/off.
       - SET/Resume buttons toggle longitudinal on.
       - Cancel button disables both lateral and longitudinal.
-      - Safety disengagements (brake, door, etc.) reset both toggles.
+      - Brake drops longitudinal only; if nothing remains active, fully disengage.
+      - Safety disengagements (door, seatbelt, gear, faults, etc.) reset both toggles.
     """
-    if not self.separate_lat_long:
+    # Latch the mode while engaged: changing the setting mid-drive must not
+    # alter the active control behavior (e.g. suddenly engaging longitudinal)
+    if not self.enabled:
+      self.separate_lat_long_active = self.separate_lat_long
+
+    if not self.separate_lat_long_active:
       self.lat_enabled = self.enabled
       self.long_enabled = self.enabled
       self.lat_wanted = self.enabled
@@ -600,6 +609,13 @@ class SelfdriveD:
     if not self.enabled and self.enabled_prev:
       self.lat_wanted = False
       self.long_wanted = False
+
+    # An engagement request is only honored when it can take effect now. If it
+    # is blocked by a NO_ENTRY condition (wrong gear, below speed, ...), the
+    # wanted flag must NOT stay latched, otherwise it would sneak in later on
+    # an unrelated engagement (e.g. a blocked ALA press in P gear, then lateral
+    # unexpectedly coming on with the next SET press in D).
+    can_engage = self.enabled or not self.events.contains(ET.NO_ENTRY)
 
     # Process user button inputs
     for be in CS.buttonEvents:
@@ -618,28 +634,34 @@ class SelfdriveD:
               self.events.add(EventName.buttonCancel)
             else:
               self.events.add(EventName.lkasDisabled)
-          else:
+          elif can_engage:
             self.lat_wanted = True
             if not self.enabled:
               self.events.add(EventName.buttonEnable)
             else:
               self.events.add(EventName.lkasEnabled)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
-        self.long_wanted = True
-        if not self.enabled:
-          self.events.add(EventName.buttonEnable)
+        if can_engage and self.CP.openpilotLongitudinalControl:
+          self.long_wanted = True
+          if not self.enabled:
+            self.events.add(EventName.buttonEnable)
       elif be.type == ButtonType.cancel and be.pressed:
         self.lat_wanted = False
         self.long_wanted = False
 
-    # Brake drops longitudinal only; lateral stays under exclusive ALA control
+    # Brake drops longitudinal only; lateral stays under exclusive ALA control.
+    # If nothing remains active, fully disengage with the usual chime.
     if CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill):
       self.long_wanted = False
+      if not self.lat_enabled and self.long_enabled:
+        self.events.add(EventName.buttonCancel)
 
     # Slowing below minEnableSpeed drops longitudinal only; lateral is unaffected
     # (speedTooLow is suppressed in car_events when separate control is on)
     if self.long_wanted and CS.vEgo < self.CP.minEnableSpeed:
       self.long_wanted = False
+      if not self.lat_enabled and self.long_enabled:
+        self.events.add(EventName.buttonCancel)
 
     # Re-run state machine in case we injected enable/disable events this frame
     if (self.events.contains(ET.ENABLE) and not self.enabled) or \
