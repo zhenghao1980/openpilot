@@ -245,6 +245,7 @@ class SelfdriveD:
 
     # Add car events, ignore if CAN isn't valid
     if CS.canValid:
+      self.car_events.separate_lat_long = self.separate_lat_long
       car_events = self.car_events.update(CS, self.CS_prev, self.sm['carControl']).to_msg()
       self.events.add_from_msg(car_events)
 
@@ -255,7 +256,13 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
+      if self.separate_lat_long:
+        # Separate lat/long: brake never disengages openpilot, it only drops
+        # longitudinal (handled in _update_separate_lat_long). Lateral stays
+        # under exclusive control of the ALA button.
+        if CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator:
+          self.events.add(EventName.pedalPressed)
+      elif (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
@@ -611,6 +618,15 @@ class SelfdriveD:
       elif be.type == ButtonType.cancel and be.pressed:
         self.lat_wanted = False
         self.long_wanted = False
+
+    # Brake drops longitudinal only; lateral stays under exclusive ALA control
+    if CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill):
+      self.long_wanted = False
+
+    # Slowing below minEnableSpeed drops longitudinal only; lateral is unaffected
+    # (speedTooLow is suppressed in car_events when separate control is on)
+    if self.long_wanted and CS.vEgo < self.CP.minEnableSpeed:
+      self.long_wanted = False
 
     # Re-run state machine in case we injected buttonEnable for lateral-only or long-only engagement
     if self.events.contains(ET.ENABLE) and not self.enabled:

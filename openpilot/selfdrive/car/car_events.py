@@ -21,6 +21,10 @@ class CarEvents:
     self.low_speed_alert = False
     self.no_steer_warning = False
     self.silent_steer_warning = True
+    # Set by selfdrived when SeparateLatLongControl is enabled. When on, lateral
+    # engagement via the ALA button ignores minEnableSpeed and speedTooLow is
+    # handled as a longitudinal-only drop by selfdrived instead of a full disable.
+    self.separate_lat_long = False
 
   def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl):
     if self.CP.brand in ('body', 'mock'):
@@ -82,9 +86,13 @@ class CarEvents:
 
     elif self.CP.brand == 'volkswagen':
       if self.CP.openpilotLongitudinalControl:
-        if CS.vEgo < self.CP.minEnableSpeed + 0.5:
+        # With separate lat/long control, the ALA button may engage lateral below
+        # minEnableSpeed, and slowing below it drops longitudinal only (handled in
+        # selfdrived) rather than disengaging everything.
+        lkas_btn = any(b.type == ButtonType.lkas for b in CS.buttonEvents)
+        if CS.vEgo < self.CP.minEnableSpeed + 0.5 and not (self.separate_lat_long and lkas_btn):
           events.add(EventName.belowEngageSpeed)
-        if CC.enabled and CS.vEgo < self.CP.minEnableSpeed:
+        if CC.enabled and CS.vEgo < self.CP.minEnableSpeed and not self.separate_lat_long:
           events.add(EventName.speedTooLow)
 
       # TODO: this needs to be implemented generically in carState struct
