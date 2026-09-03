@@ -616,10 +616,14 @@ class SelfdriveD:
             # Fully disengage (with chime) when lateral was the last active control
             if not self.long_enabled:
               self.events.add(EventName.buttonCancel)
+            else:
+              self.events.add(EventName.lkasDisabled)
           else:
             self.lat_wanted = True
             if not self.enabled:
               self.events.add(EventName.buttonEnable)
+            else:
+              self.events.add(EventName.lkasEnabled)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
         self.long_wanted = True
         if not self.enabled:

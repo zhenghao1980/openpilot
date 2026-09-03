@@ -684,6 +684,18 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.ENABLE: EngagementAlert(AudibleAlert.engage),
   },
 
+  # B8PA separate lat/long: sound-only feedback for ALA lateral toggles that
+  # don't transition the overall enabled state
+  EventName.lkasEnabled: {
+    ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
+                        Priority.LOWEST, VisualAlert.none, AudibleAlert.engage, .5),
+  },
+
+  EventName.lkasDisabled: {
+    ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
+                        Priority.LOWEST, VisualAlert.none, AudibleAlert.disengage, .5),
+  },
+
   EventName.pcmDisable: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
   },
