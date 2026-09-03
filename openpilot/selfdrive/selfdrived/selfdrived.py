@@ -604,13 +604,22 @@ class SelfdriveD:
     # Process user button inputs
     for be in CS.buttonEvents:
       if be.type == ButtonType.lkas:
-        # Toggle on falling edge to match panda safety, which sets controls_allowed
+        # Act on the falling edge to match panda safety, which sets controls_allowed
         # on ALA release. Enabling on press would send active HCA_01 while panda
         # still blocks it, causing counter gaps and a permanent EPS fault.
+        # The button acts on the currently visible state so it can never get out of
+        # sync: if lateral is on, turn it off; if it is off (or a previous
+        # engagement attempt was blocked), try to turn it on.
         if not be.pressed:
-          self.lat_wanted = not self.lat_wanted
-          if self.lat_wanted and not self.enabled:
-            self.events.add(EventName.buttonEnable)
+          if self.lat_enabled:
+            self.lat_wanted = False
+            # Fully disengage (with chime) when lateral was the last active control
+            if not self.long_enabled:
+              self.events.add(EventName.buttonCancel)
+          else:
+            self.lat_wanted = True
+            if not self.enabled:
+              self.events.add(EventName.buttonEnable)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
         self.long_wanted = True
         if not self.enabled:
@@ -628,8 +637,9 @@ class SelfdriveD:
     if self.long_wanted and CS.vEgo < self.CP.minEnableSpeed:
       self.long_wanted = False
 
-    # Re-run state machine in case we injected buttonEnable for lateral-only or long-only engagement
-    if self.events.contains(ET.ENABLE) and not self.enabled:
+    # Re-run state machine in case we injected enable/disable events this frame
+    if (self.events.contains(ET.ENABLE) and not self.enabled) or \
+       (self.events.contains(ET.USER_DISABLE) and self.enabled):
       self.enabled, self.active = self.state_machine.update(self.events)
 
     self.lat_enabled = self.enabled and self.lat_wanted
