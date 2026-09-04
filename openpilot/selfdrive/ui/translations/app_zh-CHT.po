@@ -569,6 +569,10 @@ msgstr "選取分支"
 msgid "Select a language"
 msgstr "選取語言"
 
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Separate Lateral/Longitudinal Control"
+msgstr "橫向/縱向獨立控制"
+
 #: openpilot/selfdrive/ui/layouts/settings/device.py
 msgid "Serial"
 msgstr "序號"

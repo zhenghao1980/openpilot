@@ -557,6 +557,10 @@ msgid "openpilot Longitudinal Control (Alpha)"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Separate Lateral/Longitudinal Control"
+msgstr ""
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
 msgid "UI Debug Mode"
 msgstr ""
 
