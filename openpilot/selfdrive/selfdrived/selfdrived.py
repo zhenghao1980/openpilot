@@ -589,7 +589,8 @@ class SelfdriveD:
     Separate mode:
       - ALA (lkas) button toggles lateral on/off.
       - SET/Resume buttons toggle longitudinal on.
-      - Cancel button disables both lateral and longitudinal.
+      - Cancel button disables longitudinal only (lateral stays under exclusive
+        ALA control); if longitudinal was the last active control, fully disengage.
       - Brake drops longitudinal only; if nothing remains active, fully disengage.
       - Safety disengagements (door, seatbelt, gear, faults, etc.) reset both toggles.
     """
@@ -646,8 +647,12 @@ class SelfdriveD:
           if not self.enabled:
             self.events.add(EventName.buttonEnable)
       elif be.type == ButtonType.cancel and be.pressed:
-        self.lat_wanted = False
+        # Separate mode: cancel drops longitudinal only; lateral stays under
+        # exclusive ALA button control. Fully disengage (with chime) only when
+        # longitudinal was the last active control.
         self.long_wanted = False
+        if not self.lat_enabled and self.long_enabled:
+          self.events.add(EventName.buttonCancel)
 
     # Brake drops longitudinal only; lateral stays under exclusive ALA control.
     # If nothing remains active, fully disengage with the usual chime.

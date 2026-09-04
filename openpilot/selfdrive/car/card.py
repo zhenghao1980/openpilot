@@ -110,11 +110,12 @@ class Car:
       self.RI = RI
 
     self.CP.alternativeExperience = 0
-    # B8PA: with separate lat/long control, brake must not clear panda
-    # controls_allowed (brake drops longitudinal only; lateral stays under
+    # B8PA: with separate lat/long control, brake and cancel must not clear panda
+    # controls_allowed (brake/cancel drop longitudinal only; lateral stays under
     # exclusive ALA button control)
     if self.CP.brand == "volkswagen" and self.params.get_bool("SeparateLatLongControl"):
       self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.DISABLE_DISENGAGE_ON_BRAKE
+      self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.DISABLE_DISENGAGE_ON_CANCEL
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
     self.CP.passive = not controller_available or self.CP.dashcamOnly
