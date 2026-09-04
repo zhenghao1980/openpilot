@@ -47,10 +47,6 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
-    # Right-bottom road info card — ports v0.8.16 selfdrive/ui/qt/maps/{map,map_settings}.cc
-    # panel onto the pyray onroad surface.
-    from openpilot.selfdrive.ui.onroad.road_info_overlay import road_info_overlay
-    self._road_info_overlay = road_info_overlay
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -87,7 +83,6 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.render(self._content_rect)
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
-    self._road_info_overlay.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
