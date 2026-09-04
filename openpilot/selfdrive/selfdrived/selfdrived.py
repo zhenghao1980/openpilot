@@ -641,6 +641,14 @@ class SelfdriveD:
               self.events.add(EventName.buttonEnable)
             else:
               self.events.add(EventName.lkasEnabled)
+          else:
+            # Blocked attempt (wrong gear, below speed, ...): request engagement
+            # anyway so the state machine surfaces the matching NO_ENTRY alert
+            # (e.g. "Gear not D" with refuse sound), same as a SET/RES press via
+            # CS.buttonEnable. lat_wanted deliberately stays unset so the request
+            # can not sneak in on a later unrelated engagement. can_engage is only
+            # False here when NO_ENTRY is present, so this can never engage.
+            self.events.add(EventName.buttonEnable)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
         if can_engage and self.CP.openpilotLongitudinalControl:
           self.long_wanted = True
