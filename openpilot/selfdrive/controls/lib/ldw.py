@@ -13,12 +13,16 @@ class LaneDepartureWarning:
     self.right = False
     self.last_blinker_frame = 0
 
-  def update(self, frame, modelV2, CS, CC):
+  def update(self, frame, modelV2, CS, CC, allow_during_lat_active=False):
     if CS.leftBlinker or CS.rightBlinker:
       self.last_blinker_frame = frame
 
     recent_blinker = (frame - self.last_blinker_frame) * DT_MDL < 5.0  # 5s blinker cooldown
-    ldw_allowed = CS.vEgo > LDW_MIN_SPEED and not recent_blinker and not CC.latActive
+    # allow_during_lat_active: B8PA/MLB drives the cluster FIS red-line display from
+    # this state, and stock ALA warns while actively steering — so the MLB caller
+    # (controlsd) recomputes departure without the latActive gate. plannerd's
+    # driverAssistance keeps the upstream gated behavior.
+    ldw_allowed = CS.vEgo > LDW_MIN_SPEED and not recent_blinker and (allow_during_lat_active or not CC.latActive)
 
     desire_prediction = modelV2.meta.desirePrediction
     if len(desire_prediction) and ldw_allowed:

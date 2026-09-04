@@ -19,6 +19,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, S
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
+from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -46,6 +48,11 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+
+    # B8PA/MLB: ungated lane-departure tracker for the cluster FIS red-line display
+    # (plannerd's driverAssistance LDW is gated off while latActive, but stock ALA
+    # shows the red line exactly while steering). Only consumed on MLB below.
+    self.ldw_mlb = LaneDepartureWarning()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -183,6 +190,13 @@ class Controls:
     if self.sm.valid['driverAssistance']:
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
+
+    # B8PA/MLB: recompute lane departure without the latActive gate so the Kombi
+    # FIS red-line display also works while OP is steering (stock ALA behavior).
+    if self.CP.flags & VolkswagenFlags.MLB:
+      self.ldw_mlb.update(self.sm.frame, self.sm['modelV2'], CS, CC, allow_during_lat_active=True)
+      hudControl.leftLaneDepart = self.ldw_mlb.left
+      hudControl.rightLaneDepart = self.ldw_mlb.right
 
     if self.sm['selfdriveState'].active:
       CO = self.sm['carOutput']
