@@ -10,8 +10,10 @@
 #
 # 依赖: pip install --target=/data/pylibs av (一次性, /data 持久)
 
+import atexit
 import json
 import queue
+import signal
 import socket
 import struct
 import sys
@@ -453,10 +455,27 @@ def main():
                 pass
     threading.Thread(target=ip_refresher, daemon=True).start()
 
+    # 2. 关 DLNA 时复位 IsLiveStreaming=0, 否则 camerad/encoderd 不会被 manager teardown, ISP 持续满速
+    #    SIGTERM (manager 杀进程) + SIGINT (调试 Ctrl-C) + atexit (正常退出兜底) 三路都走这里
+    def cleanup_live_stream():
+        try:
+            with open("/data/params/d/IsLiveStreaming", "w") as f:
+                f.write("0")
+            print("[main] cleanup: IsLiveStreaming=0", flush=True)
+        except OSError as e:
+            print(f"[main] cleanup 写 IsLiveStreaming 失败: {e}", flush=True)
+
+    atexit.register(cleanup_live_stream)
+    signal.signal(signal.SIGTERM, lambda *_: (cleanup_live_stream(), sys.exit(0)))
+    signal.signal(signal.SIGINT, lambda *_: (cleanup_live_stream(), sys.exit(0)))
+
     srv = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)
     srv.daemon_threads = True
     print(f"[main] HTTP+DLNA 服务 :{HTTP_PORT} 就绪", flush=True)
-    srv.serve_forever()
+    try:
+        srv.serve_forever()
+    finally:
+        cleanup_live_stream()
 
 
 if __name__ == "__main__":
