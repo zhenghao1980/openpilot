@@ -159,8 +159,8 @@ class TestVCruiseHelperMLB(OpenpilotTestCase):
 
   def test_mlb_initial_floor_and_rounding(self):
     # (当前车速 km/h, 期望初始设定 km/h)
-    cases = [(0, 30), (20, 30), (29.9, 30), (30.0, 30),
-             (30.1, 35), (32.0, 35), (34.9, 35), (35.0, 35),
+    cases = [(0, 40), (20, 40), (39.9, 40), (40.0, 40),
+             (40.1, 45), (42.0, 45), (44.9, 45), (45.0, 45),
              (121.0, 125), (144.0, 145), (150.0, 145)]  # 最后两个受 V_CRUISE_MAX=145 封顶
     for v_kph, expected in cases:
       CS = car.CarState(vEgo=v_kph * CV.KPH_TO_MS)
