@@ -7,11 +7,13 @@
 #   2. PyAV 转码 → MPEG-2 PS 720x480@20 (MMI parser_mpgvfile + IS_MPEG2_Dec_C64x 硬解)
 #   3. HTTP :8200 伺服 /live.mpg (无限流) + rootDesc/SCPD/Browse
 #   4. SSDP :1900 应答 M-SEARCH + 周期 NOTIFY alive
+#   5. offroad 看门狗: 熄火宽限 60s 自动退出, 复位 DlnaLiveEnabled 总开关
 #
 # 依赖: pip install --target=/data/pylibs av (一次性, /data 持久)
 
 import atexit
 import json
+import os
 import queue
 import signal
 import socket
@@ -409,74 +411,147 @@ def ssdp_alive(adv_ip_holder):
 
 # ---------- 主流程 ----------
 
+# 全局退出标志: 任何退出路径置位, 阻止 ip_refresher 等后台线程再写 IsLiveStreaming
+_EXITING = threading.Event()
+
+_PARAM_DIR = "/data/params/d"
+
+
+def _write_param(name: str, value: str) -> None:
+  with open(f"{_PARAM_DIR}/{name}", "w") as f:
+    f.write(value)
+
+
+def cleanup_live_stream() -> None:
+  """复位 IsLiveStreaming=0, 让 manager teardown camerad/encoderd, 防 ISP 持续满速。
+  SIGTERM/SIGINT handler、atexit、serve_forever finally 四路退出都会走到这里。"""
+  _EXITING.set()
+  try:
+    _write_param("IsLiveStreaming", "0")
+    print("[main] cleanup: IsLiveStreaming=0", flush=True)
+  except OSError as e:
+    print(f"[main] cleanup 写 IsLiveStreaming 失败: {e}", flush=True)
+
+
+# ---------- offroad 看门狗 ----------
+# 语义: offroad 连续累计 OFFROAD_GRACE_SEC 秒 -> 自动退出 + 复位 DlnaLiveEnabled 总开关为 0
+#   - 用户要求: "offroad 状态下 DLNA 播放 1 分钟就自动退出, 开关也置为关; 开关默认关, 必须手动打开"
+#   - 开关复位后 UI 状态与实际一致, manager 下一轮 ensure_running 按开关状态正常回收进程
+#   - 进程启动时就处于 offroad (停车开开关/停车重启) 同样从启动起计时, 即停车态最多播 60s
+#   - 无"全局硬超时": 行车中直播不应被无条件掐断 (2026-09-05 审查 minimax 初版时移除)
+OFFROAD_PARAMS_POLL_SEC = 2
+OFFROAD_GRACE_SEC = 60
+
+
+def _self_terminate() -> None:
+  # 先复位总开关再自杀; 之后 os.kill 走 SIGTERM handler -> cleanup_live_stream -> IsLiveStreaming=0
+  try:
+    _write_param("DlnaLiveEnabled", "0")
+    print("[offroad_wd] DlnaLiveEnabled 已复位为 0", flush=True)
+  except OSError as e:
+    print(f"[offroad_wd] 复位 DlnaLiveEnabled 失败: {e}", flush=True)
+  os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _read_is_offroad() -> bool:
+  try:
+    with open(f"{_PARAM_DIR}/IsOffroad") as f:
+      return f.read().strip() == "1"
+  except OSError:
+    # 读失败按 offroad 处理: 失败方向偏向退出省电, 宁可误杀不可漏杀
+    return True
+
+
+def offroad_watchdog(monotonic=None, sleep=None, exit_fn=None) -> None:
+  """offroad 累计超过宽限期则自动退出。monotonic/sleep/exit_fn 可注入, 供 PC 端单测。"""
+  monotonic = monotonic or time.monotonic
+  sleep = sleep or time.sleep
+  exit_fn = exit_fn or _self_terminate
+  offroad_since = None  # None=onroad 中; 时间戳=当前这轮 offroad 的起点
+  while True:
+    sleep(OFFROAD_PARAMS_POLL_SEC)
+    now = monotonic()
+    if _read_is_offroad():
+      if offroad_since is None:
+        offroad_since = now
+        print(f"[offroad_wd] 进入 offroad, {OFFROAD_GRACE_SEC}s 后自动退出", flush=True)
+      if now - offroad_since >= OFFROAD_GRACE_SEC:
+        print(f"[offroad_wd] offroad 已 {now - offroad_since:.0f}s, 自动退出 DLNA", flush=True)
+        exit_fn()
+        return
+    else:
+      if offroad_since is not None:
+        print("[offroad_wd] 重新 onroad, 取消退出倒计时", flush=True)
+        offroad_since = None
+
+
 def main():
-    # manager 启动时 stdout 被重定向到 /dev/null, 自建日志文件
-    class Tee:
-        def __init__(s, path):
-            s.f = open(path, "a", buffering=1)
-            s.orig = sys.__stdout__
-        def write(s, m):
-            s.f.write(m)
-            try: s.orig.write(m)
-            except Exception: pass
-        def flush(s):
-            s.f.flush()
-    sys.stdout = sys.stderr = Tee("/data/dlna_live.log")
-    print(f"\n===== dlna_live 启动 {time.strftime('%F %T')} =====", flush=True)
+  # manager 启动时 stdout 被重定向到 /dev/null, 自建日志文件
+  class Tee:
+    def __init__(s, path):
+      s.f = open(path, "a", buffering=1)
+      s.orig = sys.__stdout__
+    def write(s, m):
+      s.f.write(m)
+      try: s.orig.write(m)
+      except Exception: pass
+    def flush(s):
+      s.f.flush()
+  sys.stdout = sys.stderr = Tee("/data/dlna_live.log")
+  print(f"\n===== dlna_live 启动 {time.strftime('%F %T')} =====", flush=True)
 
-    # 1. 打开官方直播开关(拉起 camerad + stream_encoderd)
-    with open("/data/params/d/IsLiveStreaming", "w") as f:
-        f.write("1")
+  # 1. 打开官方直播开关(拉起 camerad + stream_encoderd)
+  try:
+    _write_param("IsLiveStreaming", "1")
     print("[main] IsLiveStreaming=1", flush=True)
+  except OSError as e:
+    print(f"[main] 写 IsLiveStreaming 失败: {e}", flush=True)
 
-    ip_holder = [local_ip()]
-    print(f"[main] 本机 IP: {ip_holder[0]}", flush=True)
+  ip_holder = [local_ip()]
+  print(f"[main] 本机 IP: {ip_holder[0]}", flush=True)
 
-    Handler.adv_ip = ip_holder[0]
+  Handler.adv_ip = ip_holder[0]
 
-    threading.Thread(target=ssdp_responder, args=(ip_holder,), daemon=True).start()
-    threading.Thread(target=ssdp_alive, args=(ip_holder,), daemon=True).start()
+  threading.Thread(target=ssdp_responder, args=(ip_holder,), daemon=True).start()
+  threading.Thread(target=ssdp_alive, args=(ip_holder,), daemon=True).start()
 
-    # 定期刷新 adv_ip(网络切换时) + 重申 IsLiveStreaming(防被 teardown 误清)
-    def ip_refresher():
-        last_ip = ip_holder[0]
-        while True:
-            time.sleep(20)
-            ip = local_ip()
-            if ip != last_ip:
-                print(f"[main] 本机 IP 变更: {last_ip} → {ip}", flush=True)
-                last_ip = ip
-            ip_holder[0] = ip
-            Handler.adv_ip = ip
-            try:
-                with open("/data/params/d/IsLiveStreaming", "w") as f:
-                    f.write("1")
-            except OSError:
-                pass
-    threading.Thread(target=ip_refresher, daemon=True).start()
+  # 定期刷新 adv_ip(网络切换时) + 重申 IsLiveStreaming(防被 teardown 误清)
+  def ip_refresher():
+    last_ip = ip_holder[0]
+    while True:
+      time.sleep(20)
+      if _EXITING.is_set():
+        break
+      ip = local_ip()
+      if ip != last_ip:
+        print(f"[main] 本机 IP 变更: {last_ip} → {ip}", flush=True)
+        last_ip = ip
+      ip_holder[0] = ip
+      Handler.adv_ip = ip
+      try:
+        if not _EXITING.is_set():
+          _write_param("IsLiveStreaming", "1")
+      except OSError:
+        pass
+  threading.Thread(target=ip_refresher, daemon=True).start()
 
-    # 2. 关 DLNA 时复位 IsLiveStreaming=0, 否则 camerad/encoderd 不会被 manager teardown, ISP 持续满速
-    #    SIGTERM (manager 杀进程) + SIGINT (调试 Ctrl-C) + atexit (正常退出兜底) 三路都走这里
-    def cleanup_live_stream():
-        try:
-            with open("/data/params/d/IsLiveStreaming", "w") as f:
-                f.write("0")
-            print("[main] cleanup: IsLiveStreaming=0", flush=True)
-        except OSError as e:
-            print(f"[main] cleanup 写 IsLiveStreaming 失败: {e}", flush=True)
+  # 2. 退出路径统一走 cleanup_live_stream (复位 IsLiveStreaming)
+  #    SIGTERM (manager 杀进程 / offroad 看门狗) + SIGINT (调试 Ctrl-C) + atexit + finally 四路
+  atexit.register(cleanup_live_stream)
+  signal.signal(signal.SIGTERM, lambda *_: (cleanup_live_stream(), sys.exit(0)))
+  signal.signal(signal.SIGINT, lambda *_: (cleanup_live_stream(), sys.exit(0)))
 
-    atexit.register(cleanup_live_stream)
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_live_stream(), sys.exit(0)))
-    signal.signal(signal.SIGINT, lambda *_: (cleanup_live_stream(), sys.exit(0)))
+  # 3. offroad 看门狗: 熄火后宽限 60s 自动退出, 同时把 DlnaLiveEnabled 总开关复位为 0
+  threading.Thread(target=offroad_watchdog, daemon=True, name="offroad_watchdog").start()
 
-    srv = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)
-    srv.daemon_threads = True
-    print(f"[main] HTTP+DLNA 服务 :{HTTP_PORT} 就绪", flush=True)
-    try:
-        srv.serve_forever()
-    finally:
-        cleanup_live_stream()
+  srv = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)
+  srv.daemon_threads = True
+  print(f"[main] HTTP+DLNA 服务 :{HTTP_PORT} 就绪", flush=True)
+  try:
+    srv.serve_forever()
+  finally:
+    cleanup_live_stream()
 
 
 if __name__ == "__main__":
-    main()
+  main()
