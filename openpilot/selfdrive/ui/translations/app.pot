@@ -3,6 +3,10 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 
 #: openpilot/system/ui/widgets/confirm_dialog.py
+#: selfdrive/ui/layouts/settings/developer.py
+msgid "DLNA Live Camera Service"
+msgstr ""
+
 #: openpilot/system/ui/widgets/html_render.py
 msgid "OK"
 msgstr ""
@@ -45,6 +49,10 @@ msgstr ""
 
 #: openpilot/system/ui/widgets/network.py
 msgid "EDIT"
+msgstr ""
+
+#: selfdrive/ui/layouts/settings/developer.py
+msgid "Serve the road camera view as a DLNA/UPnP live source over the car WiFi hotspot (for the MMI WiFi media player). Starts automatically at every boot while enabled."
 msgstr ""
 
 #: openpilot/system/ui/widgets/network.py

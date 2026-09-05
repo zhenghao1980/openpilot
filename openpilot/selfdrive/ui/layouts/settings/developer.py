@@ -25,6 +25,10 @@ DESCRIPTIONS = {
     "Enable this to switch to openpilot longitudinal control. Enabling Experimental mode is recommended when enabling openpilot longitudinal control alpha. " +
     "Changing this setting will restart openpilot if the car is powered on."
   ),
+  'dlna_live': tr_noop(
+    "Serve the road camera view as a DLNA/UPnP live source over the car WiFi hotspot " +
+    "(for the MMI WiFi media player). Starts automatically at every boot while enabled."
+  ),
 }
 
 
@@ -90,6 +94,13 @@ class DeveloperLayout(Widget):
       enabled=lambda: not ui_state.engaged,
     )
 
+    self._dlna_live_toggle = toggle_item(
+      lambda: tr("DLNA Live Camera Service"),
+      description=lambda: tr(DESCRIPTIONS["dlna_live"]),
+      initial_state=self._params.get_bool("DlnaLiveEnabled"),
+      callback=self._on_dlna_live,
+    )
+
     self._ui_debug_toggle = toggle_item(
       lambda: tr("UI Debug Mode"),
       description="",
@@ -107,6 +118,7 @@ class DeveloperLayout(Widget):
       self._lat_maneuver_toggle,
       self._alpha_long_toggle,
       self._separate_lat_long_toggle,
+      self._dlna_live_toggle,
       self._ui_debug_toggle,
     ], line_separator=True, spacing=0)
 
@@ -156,6 +168,7 @@ class DeveloperLayout(Widget):
       ("LateralManeuverMode", self._lat_maneuver_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("SeparateLatLongControl", self._separate_lat_long_toggle),
+      ("DlnaLiveEnabled", self._dlna_live_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
     ):
       item.action_item.set_state(self._params.get_bool(key))
@@ -219,3 +232,6 @@ class DeveloperLayout(Widget):
     self._params.put_bool("SeparateLatLongControl", state, block=True)
     self._params.put_bool("OnroadCycleRequested", True, block=True)
     self._update_toggles()
+
+  def _on_dlna_live(self, state: bool):
+    self._params.put_bool("DlnaLiveEnabled", state, block=True)

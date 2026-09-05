@@ -161,6 +161,10 @@ msgstr "关闭"
 msgid "Current Version"
 msgstr "当前版本"
 
+#: selfdrive/ui/layouts/settings/developer.py
+msgid "DLNA Live Camera Service"
+msgstr "DLNA 行车直播服务"
+
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 msgid "DOWNLOAD"
 msgstr "下载"
@@ -548,6 +552,10 @@ msgstr "查看 openpilot 的规则、功能与限制"
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 msgid "SELECT"
 msgstr "选择"
+
+#: selfdrive/ui/layouts/settings/developer.py
+msgid "Serve the road camera view as a DLNA/UPnP live source over the car WiFi hotspot (for the MMI WiFi media player). Starts automatically at every boot while enabled."
+msgstr "将前路摄像头画面通过车载 WiFi 热点以 DLNA/UPnP 直播源分享（供 MMI 的 WiFi 播放器使用）。开启状态下每次启动自动运行。"
 
 #: openpilot/selfdrive/ui/layouts/settings/developer.py
 msgid "SSH Keys"
