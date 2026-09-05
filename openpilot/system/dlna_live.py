@@ -3,7 +3,7 @@
 # 由 manager 按 DlnaLiveEnabled 参数门控启动 (开发者选项里有开关)。
 #
 # 功能:
-#   1. 打开 IsLiveStreaming → 订阅 livestreamNarrowRoadEncodeData (前路 H264 1152x720)
+#   1. 打开 IsLiveStreaming → 订阅 livestreamWideRoadEncodeData (广角前路 H264 1152x720)
 #   2. PyAV 转码 → MPEG-2 PS 720x480@20 (MMI parser_mpgvfile + IS_MPEG2_Dec_C64x 硬解)
 #   3. HTTP :8200 伺服 /live.mpg (无限流) + rootDesc/SCPD/Browse
 #   4. SSDP :1900 应答 M-SEARCH + 周期 NOTIFY alive
@@ -91,7 +91,7 @@ class LivePipeline:
             def readable(s): return False
 
         try:
-            sock = messaging.sub_sock("livestreamNarrowRoadEncodeData", conflate=True, timeout=2000)
+            sock = messaging.sub_sock("livestreamWideRoadEncodeData", conflate=True, timeout=2000)
         except Exception as e:
             print(f"[pipe] 订阅失败: {e}", flush=True)
             return
@@ -114,7 +114,7 @@ class LivePipeline:
                 msg = messaging.recv_one(sock)
                 if msg is None:
                     continue
-                ev = getattr(msg, "livestreamNarrowRoadEncodeData", None)
+                ev = getattr(msg, "livestreamWideRoadEncodeData", None)
                 if ev is None:
                     continue
                 if not sent_header:
