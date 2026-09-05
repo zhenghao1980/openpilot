@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
+from openpilot.selfdrive.controls.lib.lane_offset import LaneOffsetController
 from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -53,6 +54,11 @@ class Controls:
     # (plannerd's driverAssistance LDW is gated off while latActive, but stock ALA
     # shows the red line exactly while steering). Only consumed on MLB below.
     self.ldw_mlb = LaneDepartureWarning()
+
+    # Lane position offset: target shift off lane center, cm, + = left of center.
+    # 0 (default) = disabled, model keeps its natural lane position.
+    self.lane_offset = LaneOffsetController()
+    self.lane_offset_target_m = 0.0
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -139,6 +145,24 @@ class Controls:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+
+    # Lane position offset: re-read the tuning param every ~2.5s, then bias the
+    # curvature target so the car settles LanePositionOffset cm left of lane center.
+    # Correction is injected before clip_curvature so normal rate limits still apply.
+    if self.sm.frame % 250 == 0:
+      try:
+        offset_cm = float(self.params.get("LanePositionOffset") or 0.0)
+        self.lane_offset_target_m = max(-30.0, min(30.0, offset_cm)) / 100.0
+      except (TypeError, ValueError):
+        self.lane_offset_target_m = 0.0
+    lane_changing = model_v2.meta.laneChangeState != LaneChangeState.off
+    if CC.latActive and not lane_changing and not CS.steeringPressed and len(model_v2.laneLineProbs) >= 3:
+      new_desired_curvature += self.lane_offset.update(True, CS.vEgo, new_desired_curvature, self.lane_offset_target_m,
+                                                       model_v2.laneLines[1].y[0], model_v2.laneLines[2].y[0],
+                                                       model_v2.laneLineProbs[1], model_v2.laneLineProbs[2])
+    else:
+      self.lane_offset.reset()
+
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
