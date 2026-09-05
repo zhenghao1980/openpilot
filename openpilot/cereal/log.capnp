@@ -133,6 +133,8 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     bigModelFailed @102;
     lkasEnabled @104;
     lkasDisabled @105;
+    longEnabled @106;
+    longDisabled @107;
 
     lowBatteryDEPRECATED @40;
     soundsUnavailableDEPRECATED @47;

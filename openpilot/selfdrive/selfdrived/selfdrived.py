@@ -651,9 +651,13 @@ class SelfdriveD:
             self.events.add(EventName.buttonEnable)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
         if can_engage and self.CP.openpilotLongitudinalControl:
-          self.long_wanted = True
           if not self.enabled:
             self.events.add(EventName.buttonEnable)
+          elif not self.long_wanted:
+            # Lateral (or nothing latched) already running: chime when longitudinal
+            # joins, mirroring lkasEnabled. No chime on repeated SET speed changes.
+            self.events.add(EventName.longEnabled)
+          self.long_wanted = True
       elif be.type == ButtonType.cancel and be.pressed:
         # Separate mode: cancel drops longitudinal only; lateral stays under
         # exclusive ALA button control. Fully disengage (with chime) only when
@@ -661,6 +665,8 @@ class SelfdriveD:
         self.long_wanted = False
         if not self.lat_enabled and self.long_enabled:
           self.events.add(EventName.buttonCancel)
+        elif self.long_enabled:
+          self.events.add(EventName.longDisabled)
 
     # Brake drops longitudinal only; lateral stays under exclusive ALA control.
     # If nothing remains active, fully disengage with the usual chime.
@@ -668,6 +674,8 @@ class SelfdriveD:
       self.long_wanted = False
       if not self.lat_enabled and self.long_enabled:
         self.events.add(EventName.buttonCancel)
+      elif self.long_enabled:
+        self.events.add(EventName.longDisabled)
 
     # Slowing below minEnableSpeed drops longitudinal only; lateral is unaffected
     # (speedTooLow is suppressed in car_events when separate control is on)
@@ -675,6 +683,8 @@ class SelfdriveD:
       self.long_wanted = False
       if not self.lat_enabled and self.long_enabled:
         self.events.add(EventName.buttonCancel)
+      elif self.long_enabled:
+        self.events.add(EventName.longDisabled)
 
     # Re-run state machine in case we injected enable/disable events this frame
     if (self.events.contains(ET.ENABLE) and not self.enabled) or \

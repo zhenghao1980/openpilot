@@ -696,6 +696,16 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
                         Priority.LOWEST, VisualAlert.none, AudibleAlert.disengage, .5),
   },
 
+  EventName.longEnabled: {
+    ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
+                        Priority.LOWEST, VisualAlert.none, AudibleAlert.engage, .5),
+  },
+
+  EventName.longDisabled: {
+    ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
+                        Priority.LOWEST, VisualAlert.none, AudibleAlert.disengage, .5),
+  },
+
   EventName.pcmDisable: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
   },
