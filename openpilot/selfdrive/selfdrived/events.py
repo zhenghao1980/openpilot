@@ -245,6 +245,13 @@ def startup_master_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubM
 def below_engage_speed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   return NoEntryAlert(f"Drive above {get_display_speed(CP.minEnableSpeed, metric)} to engage")
 
+def long_below_engage_speed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  return Alert(
+    f"Longitudinal Unavailable Below {get_display_speed(CP.minEnableSpeed, metric)}",
+    "",
+    AlertStatus.userPrompt, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.refuse, 1.5)
+
 
 def below_steer_speed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   return Alert(
@@ -704,6 +711,10 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.longDisabled: {
     ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
                         Priority.LOWEST, VisualAlert.none, AudibleAlert.disengage, .5),
+  },
+
+  EventName.longBelowEngageSpeed: {
+    ET.PERMANENT: long_below_engage_speed_alert,
   },
 
   EventName.pcmDisable: {

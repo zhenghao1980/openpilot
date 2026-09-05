@@ -2,6 +2,7 @@ import math
 import numpy as np
 
 from opendbc.car.structs import car
+from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.common.constants import CV
 
 
@@ -132,6 +133,14 @@ class VCruiseHelper:
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
+    elif self.CP.brand == "volkswagen" and self.CP.flags & VolkswagenFlags.MLB:
+      # B8PA (user preference): initial set speed is 30 kph when slower; above
+      # 30 always round UP to the next multiple of 5. Replaces the
+      # V_CRUISE_INITIAL=40 floor and the experimental-mode 105 clamp.
+      # round to 0.1 kph first: the m/s->km/h float roundtrip can land epsilon
+      # above an exact multiple of 5 and ceil() would jump a step (35.0 -> 40)
+      v_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
+      self.v_cruise_kph = int(min(30 if v_kph < 30 else math.ceil(v_kph / 5.) * 5, V_CRUISE_MAX))
     else:
       self.v_cruise_kph = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
 

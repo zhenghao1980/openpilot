@@ -135,6 +135,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     lkasDisabled @105;
     longEnabled @106;
     longDisabled @107;
+    longBelowEngageSpeed @108;
 
     lowBatteryDEPRECATED @40;
     soundsUnavailableDEPRECATED @47;

@@ -650,7 +650,13 @@ class SelfdriveD:
             # False here when NO_ENTRY is present, so this can never engage.
             self.events.add(EventName.buttonEnable)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
-        if can_engage and self.CP.openpilotLongitudinalControl:
+        if self.CP.openpilotLongitudinalControl and self.CP.minEnableSpeed > 0 \
+                and CS.vEgo < self.CP.minEnableSpeed and self.enabled:
+          # Lateral running below the TSK cruise floor (B8: 15 kph): TSK refuses
+          # to enter cruise below the floor and faults on standstill engagement,
+          # so never latch long_wanted and never play the engage chime here.
+          self.events.add(EventName.longBelowEngageSpeed)
+        elif can_engage and self.CP.openpilotLongitudinalControl:
           if not self.enabled:
             self.events.add(EventName.buttonEnable)
           elif not self.long_wanted:

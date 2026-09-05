@@ -149,3 +149,23 @@ class TestVCruiseHelper(OpenpilotTestCase):
         self.enable(float(v_ego), experimental_mode)
         assert V_CRUISE_INITIAL <= self.v_cruise_helper.v_cruise_kph <= V_CRUISE_MAX
         assert self.v_cruise_helper.v_cruise_initialized
+
+# TODO: test pcmCruise (fork) — B8PA/MLB 初始设定速度规则: <80kph→80, >80→向上取5的倍数
+class TestVCruiseHelperMLB(OpenpilotTestCase):
+  def setup_method(self):
+    from opendbc.car.volkswagen.values import VolkswagenFlags
+    self.CP = car.CarParams(brand="volkswagen", pcmCruise=False, flags=int(VolkswagenFlags.MLB))
+    self.v_cruise_helper = VCruiseHelper(self.CP)
+
+  def test_mlb_initial_floor_and_rounding(self):
+    # (当前车速 km/h, 期望初始设定 km/h)
+    cases = [(0, 30), (20, 30), (29.9, 30), (30.0, 30),
+             (30.1, 35), (32.0, 35), (34.9, 35), (35.0, 35),
+             (121.0, 125), (144.0, 145), (150.0, 145)]  # 最后两个受 V_CRUISE_MAX=145 封顶
+    for v_kph, expected in cases:
+      CS = car.CarState(vEgo=v_kph * CV.KPH_TO_MS)
+      self.v_cruise_helper.initialize_v_cruise(CS, experimental_mode=False)
+      assert self.v_cruise_helper.v_cruise_kph == expected, f"v={v_kph}kph -> {self.v_cruise_helper.v_cruise_kph}, want {expected}"
+      # experimental_mode 下同规则（fork 覆盖了 105 钳位）
+      self.v_cruise_helper.initialize_v_cruise(CS, experimental_mode=True)
+      assert self.v_cruise_helper.v_cruise_kph == expected, f"exp-mode v={v_kph}kph -> {self.v_cruise_helper.v_cruise_kph}, want {expected}"
