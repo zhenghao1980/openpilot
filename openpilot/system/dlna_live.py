@@ -365,6 +365,7 @@ def ssdp_responder(adv_ip_holder):
             continue
         if b"M-SEARCH" not in data:
             continue
+        print(f"[ssdp] 收到 M-SEARCH ← {addr[0]}", flush=True)
         ip = adv_ip_holder[0]
         for st in (b"ssdp:all", b"upnp:rootdevice", b"urn:schemas-upnp-org:device:MediaServer:1"):
             if st in data:
@@ -407,6 +408,20 @@ def ssdp_alive(adv_ip_holder):
 # ---------- 主流程 ----------
 
 def main():
+    # manager 启动时 stdout 被重定向到 /dev/null, 自建日志文件
+    class Tee:
+        def __init__(s, path):
+            s.f = open(path, "a", buffering=1)
+            s.orig = sys.__stdout__
+        def write(s, m):
+            s.f.write(m)
+            try: s.orig.write(m)
+            except Exception: pass
+        def flush(s):
+            s.f.flush()
+    sys.stdout = sys.stderr = Tee("/data/dlna_live.log")
+    print(f"\n===== dlna_live 启动 {time.strftime('%F %T')} =====", flush=True)
+
     # 1. 打开官方直播开关(拉起 camerad + stream_encoderd)
     with open("/data/params/d/IsLiveStreaming", "w") as f:
         f.write("1")
@@ -422,9 +437,13 @@ def main():
 
     # 定期刷新 adv_ip(网络切换时) + 重申 IsLiveStreaming(防被 teardown 误清)
     def ip_refresher():
+        last_ip = ip_holder[0]
         while True:
             time.sleep(20)
             ip = local_ip()
+            if ip != last_ip:
+                print(f"[main] 本机 IP 变更: {last_ip} → {ip}", flush=True)
+                last_ip = ip
             ip_holder[0] = ip
             Handler.adv_ip = ip
             try:
