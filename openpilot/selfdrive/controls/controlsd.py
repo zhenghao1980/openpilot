@@ -181,7 +181,7 @@ class Controls:
     hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
-    hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
+    hudControl.leadVisible = bool(self.sm['longitudinalPlan'].hasLead or (len(self.sm.valid['modelV2']) and self.sm['modelV2'].leadsV3 and self.sm['modelV2'].leadsV3[0].prob > 0.5))
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
