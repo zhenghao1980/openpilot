@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
+from openpilot.selfdrive.ui.onroad.sp_chevron_metrics import ChevronMetrics as SPChevronMetrics
+from openpilot.selfdrive.ui.onroad.sp_rainbow_path import RainbowPath as SPRainbowPath
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
@@ -53,6 +55,10 @@ class ModelRenderer(Widget):
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
     self._path_offset_z = HEIGHT_INIT[0]
+
+    # Sunnypilot-style HUD overlays (Batch 1 port: rainbow path + chevron metrics)
+    self._sp_rainbow = SPRainbowPath()
+    self._sp_chevron_metrics = SPChevronMetrics()
 
     # Initialize ModelPoints objects
     self._path = ModelPoints()
@@ -129,6 +135,12 @@ class ModelRenderer(Widget):
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
+
+    # SP overlays: rainbow path on top, then chevron metrics (lead distance/speed/TTC)
+    if ui_state.rainbow_path:
+      self._sp_rainbow.draw_rainbow_path(rect, self._path)
+    if ui_state.chevron_metrics != 0:
+      self._sp_chevron_metrics.draw_lead_status(sm, radar_state, rect, self._lead_vehicles)
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""

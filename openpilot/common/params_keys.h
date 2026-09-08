@@ -24,6 +24,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarParamsCache", {CLEAR_ON_MANAGER_START, BYTES}},
     {"CarParamsPersistent", {PERSISTENT, BYTES}},
     {"CarParamsPrevRoute", {PERSISTENT, BYTES}},
+    {"ChevronInfo", {PERSISTENT, INT, "0"}},
+    {"BlindSpot", {PERSISTENT, BOOL}},  // sunnypilot port
+    {"DevUIInfo", {PERSISTENT, INT, "0"}},  // sunnypilot port: 0=off 1=bottom 2=right 3=both
+    {"ShowTurnSignals", {PERSISTENT, BOOL}},  // sunnypilot port
     {"CompletedTrainingVersion", {PERSISTENT, STRING, "0"}},
     {"ControlsReady", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"CurrentBootlog", {PERSISTENT, STRING}},
@@ -57,6 +61,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"GsmRoaming", {PERSISTENT, BOOL}},
     {"HardwareSerial", {PERSISTENT, STRING}},
     {"HasAcceptedTerms", {PERSISTENT, STRING, "0"}},
+    {"HideVEgoUI", {PERSISTENT, BOOL}},
     {"InstallDate", {PERSISTENT, TIME}},
     {"IsDriverViewEnabled", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsEngaged", {PERSISTENT, BOOL}},
@@ -113,9 +118,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"OpenpilotEnabledToggle", {PERSISTENT, BOOL, "1"}},
     {"PandaHeartbeatLost", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"PrimeType", {PERSISTENT, INT}},
+    {"RainbowPath", {PERSISTENT, BOOL}},
     {"RecordAudio", {PERSISTENT, BOOL}},
     {"RecordFront", {PERSISTENT, BOOL}},
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
+    {"RocketFuel", {PERSISTENT, BOOL}},
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
@@ -135,6 +142,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UpdaterLastFetchTime", {PERSISTENT, TIME}},
     {"UptimeOffroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
+    {"TrueVEgoUI", {PERSISTENT, BOOL}},
+    {"torqueBar", {PERSISTENT, BOOL}},
     {"ChestnutActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"ChestnutLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"Version", {PERSISTENT, STRING}},
