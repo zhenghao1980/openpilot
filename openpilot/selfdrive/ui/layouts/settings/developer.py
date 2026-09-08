@@ -2,7 +2,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.ui.widgets.ssh_key import ssh_key_item
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.list_view import toggle_item
+from openpilot.system.ui.widgets.list_view import toggle_item, multiple_button_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.lib.application import gui_app
@@ -109,6 +109,54 @@ class DeveloperLayout(Widget):
     )
     self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
 
+    # sunnypilot onroad display toggles (sp_* ports)
+    self._sp_turn_signals = toggle_item(
+      lambda: tr("Large Turn Signal Icons"),
+      description=lambda: tr("Show large turn signal icons at the top of the driving screen"),
+      initial_state=self._params.get_bool("ShowTurnSignals"),
+      callback=lambda s: self._params.put_bool("ShowTurnSignals", s, block=True),
+    )
+    self._sp_blindspot = toggle_item(
+      lambda: tr("Blind Spot Warning Icon"),
+      description=lambda: tr("Show a warning icon when a vehicle is in the blind spot while signaling"),
+      initial_state=self._params.get_bool("BlindSpot"),
+      callback=lambda s: self._params.put_bool("BlindSpot", s, block=True),
+    )
+    self._sp_torque_bar = toggle_item(
+      lambda: tr("Steering Torque Arc"),
+      description=lambda: tr("Show a lateral torque arc at the bottom of the driving screen"),
+      initial_state=self._params.get_bool("torqueBar"),
+      callback=lambda s: self._params.put_bool("torqueBar", s, block=True),
+    )
+    self._sp_rocket_fuel = toggle_item(
+      lambda: tr("Acceleration Bar"),
+      description=lambda: tr("Show actual acceleration as a bar on the left edge (green accel / red braking)"),
+      initial_state=self._params.get_bool("RocketFuel"),
+      callback=lambda s: self._params.put_bool("RocketFuel", s, block=True),
+    )
+    self._sp_rainbow = toggle_item(
+      lambda: tr("Rainbow Path"),
+      description=lambda: tr("Render the driving path with a rainbow gradient"),
+      initial_state=self._params.get_bool("RainbowPath"),
+      callback=lambda s: self._params.put_bool("RainbowPath", s, block=True),
+    )
+    self._sp_dev_ui = multiple_button_item(
+      lambda: tr("Developer UI"),
+      lambda: tr("Show developer metrics on the driving screen (distance, steering, lateral accel)"),
+      buttons=[lambda: tr("Off"), lambda: tr("Bottom"), lambda: tr("Right"), lambda: tr("Both")],
+      button_width=150,
+      selected_index=int(self._params.get("DevUIInfo") or 0),
+      callback=lambda idx: self._params.put("DevUIInfo", idx, block=True),
+    )
+    self._sp_chevron = multiple_button_item(
+      lambda: tr("Lead Chevron Metrics"),
+      lambda: tr("Show distance/speed/time-to-collision under the lead car marker"),
+      buttons=[lambda: tr("Off"), lambda: tr("Distance"), lambda: tr("Speed"), lambda: tr("TTC"), lambda: tr("All")],
+      button_width=130,
+      selected_index=int(self._params.get("ChevronInfo") or 0),
+      callback=lambda idx: self._params.put("ChevronInfo", idx, block=True),
+    )
+
     self._scroller = Scroller([
       self._adb_toggle,
       self._ssh_toggle,
@@ -120,6 +168,13 @@ class DeveloperLayout(Widget):
       self._separate_lat_long_toggle,
       self._dlna_live_toggle,
       self._ui_debug_toggle,
+      self._sp_turn_signals,
+      self._sp_blindspot,
+      self._sp_torque_bar,
+      self._sp_rocket_fuel,
+      self._sp_rainbow,
+      self._sp_dev_ui,
+      self._sp_chevron,
     ], line_separator=True, spacing=0)
 
     # Toggles should be not available to change in onroad state
@@ -170,8 +225,15 @@ class DeveloperLayout(Widget):
       ("SeparateLatLongControl", self._separate_lat_long_toggle),
       ("DlnaLiveEnabled", self._dlna_live_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
+      ("ShowTurnSignals", self._sp_turn_signals),
+      ("BlindSpot", self._sp_blindspot),
+      ("torqueBar", self._sp_torque_bar),
+      ("RocketFuel", self._sp_rocket_fuel),
+      ("RainbowPath", self._sp_rainbow),
     ):
       item.action_item.set_state(self._params.get_bool(key))
+    self._sp_dev_ui.action_item.set_selected_button(int(self._params.get("DevUIInfo") or 0))
+    self._sp_chevron.action_item.set_selected_button(int(self._params.get("ChevronInfo") or 0))
 
   def _on_enable_ui_debug(self, state: bool):
     self._params.put_bool("ShowDebugInfo", state, block=True)

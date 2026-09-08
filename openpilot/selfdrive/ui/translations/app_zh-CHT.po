@@ -829,3 +829,91 @@ msgstr[1] "{} 分鐘前"
 msgid "✓ SUBSCRIBED"
 msgstr "✓ 已訂閱"
 
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Large Turn Signal Icons"
+msgstr "轉向燈大屏圖標"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show large turn signal icons at the top of the driving screen"
+msgstr "打轉向燈時在行車屏上緣顯示大號圖標"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Blind Spot Warning Icon"
+msgstr "盲區警示圖標"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show a warning icon when a vehicle is in the blind spot while signaling"
+msgstr "打轉向燈且盲區有車時顯示警示圖標"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Steering Torque Arc"
+msgstr "轉向力矩弧"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show a lateral torque arc at the bottom of the driving screen"
+msgstr "在行車屏底部顯示橫向控制力矩弧"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Acceleration Bar"
+msgstr "實時加速度條"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show actual acceleration as a bar on the left edge (green accel / red braking)"
+msgstr "屏幕左緣豎條顯示實際加速度（加速綠色/減速紅色）"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Rainbow Path"
+msgstr "彩虹路徑"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Render the driving path with a rainbow gradient"
+msgstr "將行駛路徑渲染為彩虹漸變色"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show developer metrics on the driving screen (distance, steering, lateral accel)"
+msgstr "在行車屏顯示開發數據（車距、轉向角、橫加速度等）"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Lead Chevron Metrics"
+msgstr "前車箭頭指標"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Show distance/speed/time-to-collision under the lead car marker"
+msgstr "在前車標記下方顯示距離/車速/碰撞時間"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Developer UI"
+msgstr "Developer UI"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Off"
+msgstr "關"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Bottom"
+msgstr "底欄"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Right"
+msgstr "右欄"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Both"
+msgstr "全開"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Distance"
+msgstr "距離"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "Speed"
+msgstr "車速"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "TTC"
+msgstr "碰撞時間"
+
+#: openpilot/selfdrive/ui/layouts/settings/developer.py
+msgid "All"
+msgstr "全部"
