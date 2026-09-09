@@ -26,7 +26,7 @@ in `openpilot/selfdrive/modeld/remote_model.py` for the exact layout):
 ```bash
 # compile the big model for the local NVIDIA device (slow, once)
 python openpilot/selfdrive/modeld/compile_modeld.py \
-  --model-size 256x128 --camera-resolutions 1928x1208 \
+  --model-size 512x256 --camera-resolutions 1928x1208 1344x760 \
   --onnx openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx \
   --output /tmp/big_driving_tinygrad.pkl --frame-skip 4
 
