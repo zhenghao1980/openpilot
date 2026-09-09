@@ -121,15 +121,19 @@ Loading/Failed 弹窗）由 `deviceState.chestnutPresent`（USB 探测）驱动�
 1. `ui_state.py`（~10 行守卫）：`chestnutPresent=True` → 走原逻辑；
    `False 且 RemoteModelPresent=True` → 同一套五态机 + `remote` 标志，效果与官方
    完全一致（含弹窗文案 "small model is still available"）；
-2. 徽标（`hud_renderer.py`，~15 行）：栗子图标旁绘制链路标识——wifi 三级弧 /
-   有线 RJ45 方块（raylib 过程化绘制，不引入图片资产）；**颜色编码链路质量**
-   （绿 RTT<150ms / 橙 150-300ms / 红 >300ms 或降档中）；行车 HUD 为主展示位，
-   家庭屏底部图标栏加同款小徽标；
+2. 徽标（`hud_renderer.py`，~15 行）：栗子图标旁绘制**指示灯 + 百分比**——
+   - 指示灯：过程化绘制的小圆点 + wifi 三级弧 / 有线 RJ45 方块标识链路类型
+     （raylib 绘制，不引入图片资产），**颜色编码链路健康**（绿 RTT<150ms /
+     橙 150-300ms / 红 >300ms 或降档中）；
+   - **百分比 = 实时融合权重 w ×100**（"大模型参与度"，比官方开/关二值更细粒度，
+     数据源 `RemoteModelStats.w`）；
+   - 行车 HUD 为主展示位，家庭屏底部图标栏加同款小徽标；
 3. 参数契约（远端客户端写、UI 轮询，与 ChestnutActive 同款机制）：
    `RemoteModelPresent`(bool，会话存活) + `RemoteModelStats`(1-2Hz JSON：
-   `{iface, rtt_ms, rate_hz, w}`)——徽标与颜色的数据源；
-4. v2 遗留决策：融合模式下 `modelV2.big` 语义（会话健康即报 True 还是按权重
-   阈值），实车阶段再定，不涉及 UI 改动。
+   `{iface, rtt_ms, rate_hz, w}`)——指示灯颜色与百分比的数据源；
+4. ~~v2 遗留决策：融合模式下 `modelV2.big` 语义~~ **已定案**：会话健康即报
+   `modelV2.big=True`（状态机只管"远端脑子活没活着"），融合度细粒度由徽标百分比
+   呈现——状态机与信息展示各司其职。
 
 ### 3.3 自适应速率控制律
 
