@@ -34,6 +34,7 @@ from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.hardware.usb import CHESTNUT_USB_IDS
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import chestnut_present, chestnut_compiled, modeld_pkl_path, load_oob
+from openpilot.selfdrive.modeld.remote_model import RemoteModelState, remote_model_metadata
 
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
@@ -269,6 +270,12 @@ def main(demo=False):
   if use_extra_client:
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
 
+  # remote big model on a network-connected NVIDIA host; camera dims needed for the HELLO probe
+  REMOTE_META = None if CHESTNUT else remote_model_metadata(vipc_client_main.width, vipc_client_main.height)
+  if REMOTE_META is not None:
+    params.put_bool("ChestnutLoading", True)
+    cloudlog.warning("remote big model found, will drive with it")
+
   st = time.monotonic()
   cloudlog.warning("loading model")
   model = None
@@ -286,9 +293,17 @@ def main(demo=False):
     loader.start()
     loader.join(BIG_MODEL_TIMEOUT)
     model = big_model
+  elif REMOTE_META is not None:
+    try:
+      remote_model = RemoteModelState(vipc_client_main.width, vipc_client_main.height, REMOTE_META)
+      remote_model.warmup()
+      model = remote_model
+    except Exception:
+      cloudlog.exception("remote big model load failed")
+  if CHESTNUT or REMOTE_META is not None:
     params.put_bool("ChestnutActive", model is not None)
 
-  small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT else None
+  small_model = ModelState(vipc_client_main.width, vipc_client_main.height, False) if model is None or CHESTNUT or REMOTE_META is not None else None
   if model is None:
     model = small_model
   params.put_bool("ChestnutLoading", False)
