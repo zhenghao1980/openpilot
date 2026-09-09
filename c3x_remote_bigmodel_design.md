@@ -281,6 +281,18 @@ stock 用户使用本分支与上游 master 行为一致。
 5. **官方路径回归**：每次发布前跑 stock 配置（无环境变量） smoke——
    fake_camerad + modeld 应表现为纯小模型、无网络探测日志外的任何差异。
 
+### 7.3 v2 侵入面预测（接口同构原则）
+
+**预测结论：v2 对官方代码的净侵入为零新增，`modeld.py` 维持 v1 的 17 行守卫锚点不变。**
+关键在于接口同构：`FusionModelState`（新文件）对外暴露与 `ModelState` 完全相同的接口
+（`.run()` / `.vision_input_names` / `.chestnut` / `.warmup()`），融合、异步请求、
+自适应帧率、UDP 收发全部发生在对象内部；主循环对模型的依赖只有
+`model_output = model.run(...)` 一行，天然无感。拼接融合把平移后的大模型轨迹
+**重采样回标准 T_IDXS 网格**再返回，`fill_model_msg` 无需知道融合发生过。
+v2 仅有的官方接触点是复用而非改动：v1 构造锚点（换构造类名）、stock 降级分支
+（网络死亡时 `run()` 主动抛异常走入）、`ChestnutActive` 参数（心跳超时由融合对象
+的 I/O 线程直接写 Params，KV 存储并发安全，selfdrived 无感）。
+
 ## 8. 风险与限制
 
 - C3X 负载：小模型从热备转全程在岗 + 可能的预 warp 图，需实测 GPU/CPU 余量；
