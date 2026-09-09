@@ -245,7 +245,43 @@ CTRL 处理、推理循环（按到达序消费、hidden_state 链推进、结�
    心跳中断、UDP 端口不可达——全部应平滑降档或落 stock，禁止异常穿越到控制层；
 4. 门槛检查：所有工作点 `frameDropPerc ≈ 0`、`modeldLagging` 不触发。
 
-## 7. 风险与限制
+## 7. 改造纪律与官方兼容性
+
+**原则：不影响官方 C4+Chestnut 功能；新功能全部落在新增文件；官方文件改动仅限
+不可绕过的最小锚点；官方成熟机制优先复用而非重写。**
+
+### 7.1 当前侵入面审计（v1，实测）
+
+整个分支对官方代码的改动**只有一个文件 17 行**：`selfdrive/modeld/modeld.py`
+（1 行 import + 3 处锚点共 16 行）；其余 8 个文件全部为新增（remote_model.py、
+remote_modeld_server.py、测试与工具）。锚点守卫分析：
+
+| 锚点 | 守卫 | 官方路径行为 |
+|---|---|---|
+| 远端探测 `REMOTE_META = None if CHESTNUT else remote_model_metadata(...)` | `CHESTNUT` 为真即短路 | C4+Chestnut 用户：完全不走网络代码 |
+| 远端加载 `elif REMOTE_META is not None:` | 无 env 配置时 `remote_model_metadata` 立即返回 None |  stock 小模型路径逐字节一致 |
+| 小模型热备加载条件加 `or REMOTE_META is not None` | 同上 | 不影响 |
+
+`REMOTE_MODEL_HOST` 未设置时，三个锚点均为严格 no-op——C4+Chestnut 用户和纯
+stock 用户使用本分支与上游 master 行为一致。
+
+### 7.2 v2 开发遵守的纪律
+
+1. **新增文件承载新功能**：协议栈、融合层、自适应控制律全部放新模块
+   （`selfdrive/modeld/remote_model.py` 及其子模块、`tools/remoted/`），
+   官方文件只加守卫过的锚点；
+2. **锚点最小化且可回归**：每个锚点必须是无配置下的严格 no-op，守卫条件写进
+   commit message；`modeld.py` 的 diff 目标是始终 <20 行，便于 rebase 上游；
+3. **复用清单**（复制官方设计而非重写）：`ChestnutLoading`/`ChestnutActive`
+   参数语义、`chestnutState` 健康上报、stock 降级分支（modeld.py 现成
+   try/except）、Parser/fill_model_msg 输出契约、VisionIpc 帧通路、
+   `modeldLagging` 门槛自身不动（用 20Hz 复用发布满足它，而不是修改门槛）；
+4. **禁止事项**：不改 `selfdrived` 安全逻辑、不改 modelV2 消息契约、不降
+   frameDropPerc 门槛、不在官方类上打猴子补丁；
+5. **官方路径回归**：每次发布前跑 stock 配置（无环境变量） smoke——
+   fake_camerad + modeld 应表现为纯小模型、无网络探测日志外的任何差异。
+
+## 8. 风险与限制
 
 - C3X 负载：小模型从热备转全程在岗 + 可能的预 warp 图，需实测 GPU/CPU 余量；
 - 融合引入官方没有的新失效模式（拼接/权重 bug 产生"看似合理的错误轨迹"），
