@@ -166,7 +166,10 @@ def remote_model_metadata(cam_w: int, cam_h: int) -> dict | None:
   if _remote_host() is None:
     return None
   try:
-    return RemoteModelClient(cam_w, cam_h).meta
+    client = RemoteModelClient(cam_w, cam_h)
+    meta = client.meta
+    client.close()  # the probe is a one-shot handshake; modeld opens its own session
+    return meta
   except Exception:
     return None
 
