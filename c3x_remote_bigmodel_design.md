@@ -113,8 +113,9 @@ meta（脱手/急刹/刹车灯概率，FCW 用）、视觉里程计 pose、actio
 
 **动机**：官方 UI 五态效果（绿栗子=大模型工作中/呼吸=加载/橙栗子=失败 + Big Model
 Loading/Failed 弹窗）由 `deviceState.chestnutPresent`（USB 探测）驱动；网络方案该信号
-恒 False → 不改 UI 则远端大模型激活时屏幕毫无显示。故 UI 需要一处受控扩展
-（§7.2 纪律记录在案的所有者请求例外），且真 Chestnut 插拔时官方路径必须一行不动。
+恒 False → 需要为网络大模型增加 UI 呈现。UI 属可个性化改造面（§7.2 第 5 条所有者
+裁定），以下为基线设计，呈现形式可自由发挥；唯一正确性约束：真 Chestnut 插入时的
+官方显示行为不得被破坏。
 
 **设计**（真 Chestnut 优先，网络模式仅为无 USB Chestnut 时的平行来源）：
 
@@ -302,10 +303,12 @@ stock 用户使用本分支与上游 master 行为一致。
    参数语义、`chestnutState` 健康上报、stock 降级分支（modeld.py 现成
    try/except）、Parser/fill_model_msg 输出契约、VisionIpc 帧通路、
    `modeldLagging` 门槛自身不动（用 20Hz 复用发布满足它，而不是修改门槛）；
-4. **禁止事项**：不改 `selfdrived` 安全逻辑、不改 modelV2 消息契约、不降
-   frameDropPerc 门槛、不在官方类上打猴子补丁；UI 仅允许 §3.5 记录在案的
-   一处受控扩展（远端链路标识），真 Chestnut 路径守卫不动；
-5. **官方路径回归**：每次发布前跑 stock 配置（无环境变量） smoke——
+4. **禁止事项**（核心安全面，红线不变）：不改 `selfdrived` 安全逻辑、不改 modelV2
+   消息契约、不降 frameDropPerc 门槛、不在官方类上打猴子补丁；
+5. **UI 属可个性化改造面**（所有者裁定）：社区分支本大量改造 UI，非核心安全代码，
+   允许自由设计（含 §3.5 徽标可做 richer 呈现：动效、融合面板等）；唯一保留的
+   正确性约束：真 Chestnut 插入时的官方显示行为不得被破坏；
+6. **官方路径回归**：每次发布前跑 stock 配置（无环境变量） smoke——
    fake_camerad + modeld 应表现为纯小模型、无网络探测日志外的任何差异。
 
 ### 7.3 v2 侵入面预测（接口同构原则）
