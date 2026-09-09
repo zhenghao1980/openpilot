@@ -182,6 +182,9 @@ class Controls:
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
     hudControl.leadVisible = bool(self.sm['longitudinalPlan'].hasLead or (self.sm.valid['modelV2'] and self.sm['modelV2'].leadsV3 and self.sm['modelV2'].leadsV3[0].prob > 0.5))
+    hudControl.leadDistance = float(self.sm['modelV2'].leadsV3[0].x[0]) if (hudControl.leadVisible and self.sm.valid['modelV2'] and
+                                                                           self.sm['modelV2'].leadsV3) else 0.0
+    hudControl.latEnabled = bool(self.sm['selfdriveState'].latEnabled)
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
