@@ -10,7 +10,9 @@ frame sequence to both paths and requires parsed outputs to match:
 Needs a built openpilot (scons) and the compiled model pickle. Run with the
 repo venv:
   python openpilot/tools/remoted/tests/test_numerical_parity.py
+  python openpilot/tools/remoted/tests/test_numerical_parity.py --model /tmp/big_driving_tinygrad.pkl
 """
+import argparse
 import os
 import socket
 import subprocess
@@ -25,6 +27,20 @@ sys.path.insert(0, REPO_ROOT)
 
 CAM_W, CAM_H = 1928, 1208
 N_FRAMES = 5
+
+MODEL_PATH = os.environ.get("PARITY_MODEL", "")
+
+
+def _parse_args():
+  # keep unittest happy: only parse our flag when present
+  if "--model" in sys.argv:
+    idx = sys.argv.index("--model")
+    global MODEL_PATH
+    MODEL_PATH = sys.argv[idx + 1]
+    del sys.argv[idx:idx + 2]
+
+
+_parse_args()
 
 
 class _Buf:
@@ -47,11 +63,13 @@ class NumericalParityTest(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     from openpilot.selfdrive.modeld.helpers import modeld_pkl_path
+    from openpilot.tools.remoted.remote_modeld_server import _load_model
 
+    model_path = MODEL_PATH or str(modeld_pkl_path(False))
     cls.port = 20000 + (os.getpid() % 20000)
     cls.server = subprocess.Popen(
       [sys.executable, os.path.join(REPO_ROOT, "openpilot/tools/remoted/remote_modeld_server.py"),
-       "--model", str(modeld_pkl_path(False)), "--port", str(cls.port)],
+       "--model", model_path, "--port", str(cls.port)],
       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
       _wait_port(cls.port)
@@ -64,11 +82,9 @@ class NumericalParityTest(unittest.TestCase):
     os.environ["REMOTE_MODEL_PORT"] = str(cls.port)
     os.environ["REMOTE_MODEL_TIMEOUT_MS"] = "120000"  # first session loads the model
 
-    from openpilot.selfdrive.modeld.modeld import ModelState
     from openpilot.selfdrive.modeld.remote_model import RemoteModelState, remote_model_metadata
 
-    cls.stock = ModelState(CAM_W, CAM_H, False)
-    cls.stock.warmup()
+    cls.stock = _load_model(CAM_W, CAM_H, model_path)
 
     meta = remote_model_metadata(CAM_W, CAM_H)
     assert meta is not None, "remote server not reachable"
