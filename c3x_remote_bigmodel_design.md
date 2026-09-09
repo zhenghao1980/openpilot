@@ -109,6 +109,28 @@ meta（脱手/急刹/刹车灯概率，FCW 用）、视觉里程计 pose、actio
 - 融合权重 w 是 staleness 与 plan_stds 的**连续函数**（示例：RTT=100ms→w≈0.95，
   300ms→w≈0.3），禁止硬阈值跳变；w 低通滤波 + 速率切换迟滞（governor 式），防控制抖动。
 
+### 3.5 UI 呈现与远端链路标识
+
+**动机**：官方 UI 五态效果（绿栗子=大模型工作中/呼吸=加载/橙栗子=失败 + Big Model
+Loading/Failed 弹窗）由 `deviceState.chestnutPresent`（USB 探测）驱动；网络方案该信号
+恒 False → 不改 UI 则远端大模型激活时屏幕毫无显示。故 UI 需要一处受控扩展
+（§7.2 纪律记录在案的所有者请求例外），且真 Chestnut 插拔时官方路径必须一行不动。
+
+**设计**（真 Chestnut 优先，网络模式仅为无 USB Chestnut 时的平行来源）：
+
+1. `ui_state.py`（~10 行守卫）：`chestnutPresent=True` → 走原逻辑；
+   `False 且 RemoteModelPresent=True` → 同一套五态机 + `remote` 标志，效果与官方
+   完全一致（含弹窗文案 "small model is still available"）；
+2. 徽标（`hud_renderer.py`，~15 行）：栗子图标旁绘制链路标识——wifi 三级弧 /
+   有线 RJ45 方块（raylib 过程化绘制，不引入图片资产）；**颜色编码链路质量**
+   （绿 RTT<150ms / 橙 150-300ms / 红 >300ms 或降档中）；行车 HUD 为主展示位，
+   家庭屏底部图标栏加同款小徽标；
+3. 参数契约（远端客户端写、UI 轮询，与 ChestnutActive 同款机制）：
+   `RemoteModelPresent`(bool，会话存活) + `RemoteModelStats`(1-2Hz JSON：
+   `{iface, rtt_ms, rate_hz, w}`)——徽标与颜色的数据源；
+4. v2 遗留决策：融合模式下 `modelV2.big` 语义（会话健康即报 True 还是按权重
+   阈值），实车阶段再定，不涉及 UI 改动。
+
 ### 3.3 自适应速率控制律
 
 ```
@@ -277,7 +299,8 @@ stock 用户使用本分支与上游 master 行为一致。
    try/except）、Parser/fill_model_msg 输出契约、VisionIpc 帧通路、
    `modeldLagging` 门槛自身不动（用 20Hz 复用发布满足它，而不是修改门槛）；
 4. **禁止事项**：不改 `selfdrived` 安全逻辑、不改 modelV2 消息契约、不降
-   frameDropPerc 门槛、不在官方类上打猴子补丁；
+   frameDropPerc 门槛、不在官方类上打猴子补丁；UI 仅允许 §3.5 记录在案的
+   一处受控扩展（远端链路标识），真 Chestnut 路径守卫不动；
 5. **官方路径回归**：每次发布前跑 stock 配置（无环境变量） smoke——
    fake_camerad + modeld 应表现为纯小模型、无网络探测日志外的任何差异。
 
