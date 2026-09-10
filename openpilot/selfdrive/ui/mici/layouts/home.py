@@ -167,6 +167,7 @@ class MiciHomeLayout(Widget):
     self._date_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._branch_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, scroll=True)
     self._version_commit_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+    self._fusion_label = UnifiedLabel("", font_size=28, text_color=rl.Color(0, 255, 0, 255), font_weight=FontWeight.BOLD, max_width=120, wrap_text=False)
 
   def _update_state(self):
     if self.is_pressed and not self._is_pressed_prev:
@@ -265,6 +266,14 @@ class MiciHomeLayout(Widget):
     self._chestnut_failed_icon.set_visible(not usb_unknown and chestnut_state in (ChestnutState.UNCOMPILED, ChestnutState.FAILED))
     self._mic_icon.set_visible(ui_state.recording_audio)
     self._body_icon.set_visible(bool(ui_state.is_body))
+
+    # ***** Remote fusion weight indicator *****
+    fw = ui_state.remote_fusion_weight
+    if ui_state.chestnut_state == ChestnutState.ACTIVE and fw > 0.0:
+      self._fusion_label.set_text(f'{int(fw * 100)}%')
+      self._fusion_label.set_position(self.rect.x + self.rect.width - 200 - HOME_PADDING,
+                                       self.rect.y + self.rect.height - 40)
+      self._fusion_label.render()
 
     footer_rect = rl.Rectangle(self.rect.x + HOME_PADDING, self.rect.y + self.rect.height - 48, self.rect.width - HOME_PADDING, 48)
     self._status_bar_layout.render(footer_rect)

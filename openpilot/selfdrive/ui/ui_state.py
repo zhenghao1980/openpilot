@@ -96,6 +96,7 @@ class UIState:
     self.usb_disconnected_ts: float | None = None
     self.usb_unknown: bool = False
     self.chestnut_state = ChestnutState.DISCONNECTED
+    self.remote_fusion_weight: float = 0.0
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -251,6 +252,10 @@ class UIState:
       self.chestnut_compiled = chestnut_compiled()
     self.chestnut_active = self.params.get("ChestnutActive")
     self.chestnut_loading = self.params.get_bool("ChestnutLoading")
+    try:
+      self.remote_fusion_weight = float(self.params.get("RemoteModelFusionWeight") or "0")
+    except ValueError:
+      self.remote_fusion_weight = 0.0
     now = time.monotonic()
     if read_int(TYPEC_CC_ORIENTATION_PATH) != 0:
       self.usb_disconnected_ts = None

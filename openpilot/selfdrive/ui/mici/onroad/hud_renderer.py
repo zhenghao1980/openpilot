@@ -217,6 +217,12 @@ class HudRenderer(Widget):
     pos = rl.Vector2(rect.x + rect.width - 10 - icon.width,
                      rect.y + rect.height - 14 - (self._txt_wheel.height + icon.height) / 2)
     rl.draw_texture_ex(icon, pos, 0.0, 1.0, rl.Color(255, 255, 255, int(255 * opacity * alpha)))
+    # Draw remote fusion weight percentage next to chestnut icon
+    fw = ui_state.remote_fusion_weight
+    if ui_state.chestnut_state == ChestnutState.ACTIVE and fw > 0.0:
+          pct_text = f'{int(fw * 100)}%'
+          text_pos = rl.Vector2(pos.x + icon.width + 4, pos.y + (icon.height - 20) / 2)
+          rl.draw_text_ex(self._font_bold, pct_text, text_pos, 20, 0, rl.Color(0, 255, 0, int(255 * opacity * alpha)))
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel

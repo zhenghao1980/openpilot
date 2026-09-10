@@ -21,6 +21,7 @@ import numpy as np
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.remote_udp import UdpRemoteClient, RESP_OK
+from openpilot.common.params import Params
 
 T_IDXS = ModelConstants.T_IDXS
 X_IDXS = ModelConstants.X_IDXS
@@ -64,6 +65,7 @@ class FusionModelState:
     self._session_start_ts: float | None = None
     self._last_big_parsed: dict | None = None
     self._last_big_staleness_ms: float = 0.0
+    self._params = Params()
 
   def warmup(self) -> None:
     from openpilot.selfdrive.modeld.modeld import ModelState
@@ -102,8 +104,10 @@ class FusionModelState:
       self._last_big_staleness_ms = max(0.0, stats.get("rtt_ms", 0.0) / 2.0)
       self._last_big_parsed = big_parsed
 
-    # 4) compute fusion weight w ∈ [0,1]
+    # 4) compute fusion weight w ∈ [0,1] and publish to UI
     w = self._compute_weight()
+    self._params.put("RemoteModelFusionWeight", str(round(w, 4)))
+
     if w > 0.0 and self._last_big_parsed is not None:
       return self._fuse(small_outputs, self._last_big_parsed, w)
     return small_outputs
