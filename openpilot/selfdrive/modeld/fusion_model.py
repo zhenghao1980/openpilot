@@ -24,8 +24,6 @@ from openpilot.selfdrive.modeld.remote_udp import UdpRemoteClient, RESP_OK
 
 T_IDXS = ModelConstants.T_IDXS
 X_IDXS = ModelConstants.X_IDXS
-from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.remote_udp import UdpRemoteClient, RESP_OK
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -33,24 +31,19 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
 
 
 class FusionModelState:
-  """Drop-in replacement for ModelState / RemoteModelState in modeld.py.
-
-  Construction (called from modeld.py anchor):
-    model = FusionModelState(cam_w, cam_h, meta)   # meta from remote_model_metadata()
-  """
+  """Drop-in replacement for ModelState / RemoteModelState in modeld.py."""
 
   # tunables (centralised, see §9.11-13 of design doc)
-  RAMP_S: float = 2.0               # cold-start w ramp duration
-  TAU0_MS: float = 150.0            # staleness decay constant for w
-  PLAN_TRANSITION_S: float = 0.4    # plan splice transition half-width
-  LANE_DISTANCE_THRESHOLD_M: float = 20.0  # near/far split for lanes
+  RAMP_S: float = 2.0
+  TAU0_MS: float = 150.0
+  PLAN_TRANSITION_S: float = 0.4
+  LANE_DISTANCE_THRESHOLD_M: float = 20.0
 
   def __init__(self, cam_w: int, cam_h: int, meta: dict):
-    self.chestnut = True            # upstream flags: we act like chestnut
+    self.chestnut = True
     self.cam_w, self.cam_h = cam_w, cam_h
 
     # small model created lazily in warmup() to avoid circular import
-    # (modeld.py -> remote_model -> fusion_model -> modeld.ModelState)
     self._small_model = None
 
     # UDP big-model link
@@ -58,9 +51,12 @@ class FusionModelState:
     port = int(os.environ.get("REMOTE_MODEL_PORT", "8571"))
     self.udp_client = UdpRemoteClient(host, port, cam_w, cam_h)
 
-    # parser for big outputs (small model has its own inside ModelState)
+    # parser for big outputs
     self.parser = Parser()
-    self.big_output_slices = {k: slice(a, b) for k, (a, b) in meta["output_slices"].items()}
+    # meta["output_slices"] may arrive as lists [a,b] (wire JSON) or slice objects (tests)
+    def _to_slice(v):
+      return v if isinstance(v, slice) else slice(v[0], v[1])
+    self.big_output_slices = {k: _to_slice(v) for k, v in meta["output_slices"].items()}
     self.input_shapes = {k: tuple(v) for k, v in meta["input_shapes"].items()}
     self.vision_input_names = [k for k in self.input_shapes if "img" in k]
 
@@ -69,10 +65,7 @@ class FusionModelState:
     self._last_big_parsed: dict | None = None
     self._last_big_staleness_ms: float = 0.0
 
-  # -- ModelState-compatible interface ---------------------------------------
-
   def warmup(self) -> None:
-    # lazy import: modeld.py is the importer, so ModelState is available at call time
     from openpilot.selfdrive.modeld.modeld import ModelState
     self._small_model = ModelState(self.cam_w, self.cam_h, False)
     self._small_model.warmup()
@@ -82,7 +75,6 @@ class FusionModelState:
     self._session_start_ts = time.monotonic()
 
   def run(self, bufs: dict, transforms: dict, inputs: dict, after_enqueue=None) -> dict:
-    """One modeld iteration: small model sync + async big request + fuse."""
     if self._small_model is None:
       raise RuntimeError("FusionModelState: warmup() not called")
 
@@ -93,7 +85,7 @@ class FusionModelState:
     if self.udp_client.ready:
       self.udp_client.infer(bufs, transforms, inputs)
 
-    # 3) drain result queue, keep only the newest (discard stale intermediates)
+    # 3) drain result queue, keep only the newest
     newest: dict | None = None
     while True:
       r = self.udp_client.poll_result()
@@ -116,16 +108,12 @@ class FusionModelState:
       return self._fuse(small_outputs, self._last_big_parsed, w)
     return small_outputs
 
-  # -- weight ----------------------------------------------------------------
-
   def _compute_weight(self) -> float:
     if self._session_start_ts is None:
       return 0.0
     ramp = min(1.0, (time.monotonic() - self._session_start_ts) / self.RAMP_S)
     w_staleness = np.exp(-self._last_big_staleness_ms / self.TAU0_MS)
     return float(w_staleness * ramp)
-
-  # -- fusion ----------------------------------------------------------------
 
   def _fuse(self, small: dict, big: dict, w: float) -> dict:
     """Semantic-space fusion. `small` and `big` are Parser output dicts."""
@@ -163,8 +151,6 @@ class FusionModelState:
     return fused
 
   def _blend_plan(self, small_plan: np.ndarray, big_plan: np.ndarray, w: float) -> np.ndarray:
-    """Time-splice plan.  Shape (1, IDX_N, PLAN_WIDTH=15).
-    small for t<τ-δ, big for t>τ+δ, smooth sigmoid in between."""
     result = small_plan.copy()
     tau_s = self._last_big_staleness_ms / 1000.0
     half_trans = self.PLAN_TRANSITION_S / 2.0
@@ -176,8 +162,6 @@ class FusionModelState:
     return result
 
   def _blend_by_distance(self, small_arr: np.ndarray, big_arr: np.ndarray, w: float) -> np.ndarray:
-    """Distance-splice for lanes/edges.  Shape (1, N, IDX_N, 2).
-    Hard threshold at LANE_DISTANCE_THRESHOLD_M; blended by w on far side."""
     result = small_arr.copy()
     idx = next((i for i, x in enumerate(X_IDXS) if x >= self.LANE_DISTANCE_THRESHOLD_M), len(X_IDXS))
     if idx < len(X_IDXS):
