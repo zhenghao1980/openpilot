@@ -111,12 +111,25 @@ class TestFusionModelState(unittest.TestCase):
 
     small = np.zeros((1, ModelConstants.NUM_LANE_LINES, ModelConstants.IDX_N, ModelConstants.LANE_LINES_WIDTH), dtype=np.float32)
     big = np.ones((1, ModelConstants.NUM_LANE_LINES, ModelConstants.IDX_N, ModelConstants.LANE_LINES_WIDTH), dtype=np.float32)
-    blended = f._blend_by_distance(small, big, w)
 
-    near_idx = next(i for i, x in enumerate(X_IDXS) if x >= 10.0)
+    # 动态边界: v_ego=0 时 threshold=MIN(10m)，10m 内纯小、以外按 w 混合
+    blended = f._blend_by_distance(small, big, w, v_ego_mps=0.0)
+    near_idx = next(i for i, x in enumerate(X_IDXS) if x >= 5.0)
     self.assertAlmostEqual(blended[0, 0, near_idx, 0].item(), 0.0, delta=1e-5)
-
     far_idx = next(i for i, x in enumerate(X_IDXS) if x >= 60.0)
+    self.assertAlmostEqual(blended[0, 0, far_idx, 0].item(), 0.5, delta=1e-5)
+
+    # 动态边界: v_ego=30, staleness=0.1s+margin 0.5s -> threshold=18m，12m 处仍纯小，30m 处混合
+    f._last_big_staleness_ms = 100.0
+    blended = f._blend_by_distance(small, big, w, v_ego_mps=30.0)
+    mid_idx = next(i for i, x in enumerate(X_IDXS) if x >= 12.0)
+    self.assertAlmostEqual(blended[0, 0, mid_idx, 0].item(), 0.0, delta=1e-5)
+    far_idx = next(i for i, x in enumerate(X_IDXS) if x >= 30.0)
+    self.assertAlmostEqual(blended[0, 0, far_idx, 0].item(), 0.5, delta=1e-5)
+
+    # 上限: v_ego=50 -> 30m 超 MAX 也会被 clip 到 80m 内
+    blended = f._blend_by_distance(small, big, w, v_ego_mps=50.0)
+    far_idx = next(i for i, x in enumerate(X_IDXS) if x >= 100.0)
     self.assertAlmostEqual(blended[0, 0, far_idx, 0].item(), 0.5, delta=1e-5)
 
   def test_fuse_big_priority_fields(self):
@@ -162,3 +175,59 @@ class TestFusionModelState(unittest.TestCase):
 
 if __name__ == "__main__":
   unittest.main()
+
+class _FakeParams:
+  def __init__(self):
+    self.writes = []
+
+  def put(self, key, val, block=False):
+    self.writes.append((key, val))
+
+
+class TestPublishUiState(unittest.TestCase):
+  def _make(self):
+    f = FusionModelState(1928, 1208, META)
+    f._session_start_ts = time.monotonic() - 3.0  # past ramp
+    f._params = _FakeParams()
+    return f
+
+  def _state_writes(self, f):
+    return [v for k, v in f._params.writes if k == "RemoteModelState"]
+
+  def test_connecting_before_first_result(self):
+    f = self._make()
+    f._publish_ui_state(0.0)
+    self.assertEqual(self._state_writes(f), [0])
+
+  def test_active_when_fresh_and_high_weight(self):
+    f = self._make()
+    f._last_big_ok_ts = time.monotonic()
+    f._publish_ui_state(0.85)
+    self.assertEqual(self._state_writes(f), [1])
+
+  def test_weak_when_stale_or_low_weight(self):
+    f = self._make()
+    f._last_big_ok_ts = time.monotonic() - 1.2  # stale but not down
+    f._publish_ui_state(0.9)
+    self.assertEqual(self._state_writes(f), [2])
+    f2 = self._make()
+    f2._last_big_ok_ts = time.monotonic()
+    f2._publish_ui_state(0.3)  # fresh but low weight
+    self.assertEqual(self._state_writes(f2), [2])
+
+  def test_down_after_2s_silence(self):
+    f = self._make()
+    f._last_big_ok_ts = time.monotonic() - 3.0
+    f._publish_ui_state(0.0)
+    self.assertEqual(self._state_writes(f), [3])
+
+  def test_writes_throttled_on_unchanged_values(self):
+    f = self._make()
+    f._last_big_ok_ts = time.monotonic()
+    f._publish_ui_state(0.851)
+    f._publish_ui_state(0.852)  # same state, same rounded pct
+    f._publish_ui_state(0.852)
+    self.assertEqual(len(f._params.writes), 2)  # one state + one weight
+    f._publish_ui_state(0.86)   # pct changed -> one more weight write
+    self.assertEqual(len(f._params.writes), 3)
+    self.assertEqual(f._params.writes[-1], ("RemoteModelFusionWeight", "0.86"))

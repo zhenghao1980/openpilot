@@ -194,7 +194,14 @@ def hw_state_thread(end_event, hw_queue):
 
 
 def hardware_thread(end_event, hw_queue) -> None:
-  system_stats = LinuxSystemStats()
+  if sys.platform == "darwin":
+    # macOS 无 /proc：sim 场景 deviceState 遥测置 0（仅影响 cpu/mem 使用率展示）
+    class _NullStats:
+      def memory_usage_percent(self) -> float: return 0.0
+      def cpu_usage_percent(self) -> list[float]: return [0.0]
+    system_stats = _NullStats()
+  else:
+    system_stats = LinuxSystemStats()
   pm = messaging.PubMaster(['deviceState'])
   sm = messaging.SubMaster(["peripheralState", "gpsLocationExternal", "selfdriveState", "pandaStates", "chestnutState"], poll="pandaStates")
 

@@ -17,13 +17,14 @@ Usage (on the NVIDIA host, inside an openpilot checkout):
 """
 import argparse
 import hashlib
+import threading
 import json
 import os
 
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.helpers import modeld_pkl_path
 from openpilot.selfdrive.modeld.remote_udp import UdpRemoteServer, DEFAULT_PORT
-from openpilot.tools.remoted.remote_modeld_server import ModelCache, _Buf, meta_payload, run_raw
+from openpilot.tools.remoted.remote_modeld_server import ModelCache, _Buf, meta_payload, run_raw, run_raw_warped
 
 
 def sha256_of(path: str) -> str:
@@ -38,6 +39,8 @@ def main() -> None:
   parser = argparse.ArgumentParser(description="Serve the big driving model over UDP to a remote C3X (v2 protocol)")
   parser.add_argument("--model", default=str(modeld_pkl_path(True)),
                       help="compiled big-model pickle (must be compiled for the NVIDIA device)")
+  parser.add_argument("--payload", choices=["nv12", "warped"], default="nv12",
+                      help="warped = 客户端已完成 warp, 直接收 (2,6,128,256) uint8 张量 (需 headless pkl)")
   parser.add_argument("--port", type=int, default=int(os.environ.get("REMOTE_MODEL_PORT", DEFAULT_PORT)))
   parser.add_argument("--cam", default="1928x1208", help="pre-warm camera resolution (only resolution served)")
   parser.add_argument("--beacon-target", default="255.255.255.255",
@@ -46,7 +49,7 @@ def main() -> None:
   args = parser.parse_args()
 
   cam_w, cam_h = map(int, args.cam.split("x"))
-  cache = ModelCache(args.model)
+  cache = ModelCache(args.model, headless=(args.payload == "warped"))
 
   # self-check before READY: the model must load and warm up here, not in the
   # I/O loop, so HELLO/META stays fast and beacons never advertise a dud
@@ -60,15 +63,27 @@ def main() -> None:
     model = cache.get(cam_w, cam_h)
     meta = json.loads(meta_payload(model))
     meta["model_sha256"] = model_sha
+    meta["payload"] = args.payload
     return meta
 
   def infer_fn(req: dict):
+    if reset_needed.is_set():
+      reset_needed.clear()
+      cache.reset(cam_w, cam_h)   # worker 线程内 warmup, 不阻塞主循环心跳
     model = cache.get(cam_w, cam_h)
+    if args.payload == "warped":
+      return run_raw_warped(model, req["bufs"]["warped"], req["inputs"])
     return run_raw(model, {k: _Buf(v) for k, v in req["bufs"].items()},
                    req["transforms"], req["inputs"])
 
+  reset_needed = threading.Event()
+
   def on_session(up: bool) -> None:
-    cloudlog.warning(f"session {'up' if up else 'down'}")
+    if up:
+      # 时序状态只在新会话边界重置, 但 warmup 可能耗时数秒(CPU 模型),
+      # 绝不能跑在主循环里(会饿死心跳)——置标志, 由 worker 线程在下一帧前执行
+      reset_needed.set()
+    cloudlog.warning("session " + ("up" if up else "down"))
 
   srv = UdpRemoteServer(args.port, meta_fn, infer_fn,
                         beacon_target=args.beacon_target, queue_depth=args.queue_depth,

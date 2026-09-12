@@ -97,6 +97,7 @@ class UIState:
     self.usb_unknown: bool = False
     self.chestnut_state = ChestnutState.DISCONNECTED
     self.remote_fusion_weight: float = 0.0
+    self.remote_model_state: int = -1  # -1 = fusion not enabled, badge hidden
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -256,6 +257,11 @@ class UIState:
       self.remote_fusion_weight = float(self.params.get("RemoteModelFusionWeight") or "0")
     except ValueError:
       self.remote_fusion_weight = 0.0
+    rms = self.params.get("RemoteModelState")
+    try:
+      self.remote_model_state = -1 if rms is None else int(rms)
+    except (ValueError, TypeError):
+      self.remote_model_state = -1
     now = time.monotonic()
     if read_int(TYPEC_CC_ORIENTATION_PATH) != 0:
       self.usb_disconnected_ts = None

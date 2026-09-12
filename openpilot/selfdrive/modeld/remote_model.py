@@ -31,6 +31,12 @@ def remote_model_metadata(cam_w: int, cam_h: int) -> dict | None:
   """
   host = os.environ.get("REMOTE_MODEL_HOST") or None
   if host is None:
+    try:
+      from openpilot.common.params import Params
+      host = Params().get("RemoteModelHost", encoding="utf-8") or None
+    except Exception:
+      host = None
+  if host is None:
     return None
   try:
     client = UdpRemoteClient(host, int(os.environ.get("REMOTE_MODEL_PORT", "8571")),

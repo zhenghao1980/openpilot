@@ -7,7 +7,16 @@ import tempfile
 from pathlib import Path
 
 from openpilot.common.file_chunker import get_manifest_path
-from openpilot.common.hardware.usb import CHESTNUT_USB_PRODUCT, USB_DEVICES_PATH, is_chestnut_usb_id
+try:
+  from openpilot.common.hardware.usb import CHESTNUT_USB_PRODUCT, USB_DEVICES_PATH, is_chestnut_usb_id
+except ImportError:
+  # 非 Linux 平台(原生 Windows 等)无硬件层: chestnut USB 检测恒为不可用
+  from pathlib import Path
+  CHESTNUT_USB_PRODUCT = None
+  USB_DEVICES_PATH = Path("/nonexistent")
+
+  def is_chestnut_usb_id(vendor_id, product_id):
+    return False
 
 MODELS_DIR = Path(__file__).resolve().parent / 'models'
 TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'

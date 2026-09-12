@@ -22,7 +22,7 @@ def make_inputs(i):
           "traffic_convention": np.array([1, 0], dtype=np.float32),
           "action_t": np.array([0.05 * i, 0.03 * i], dtype=np.float32)}
 
-c = UdpRemoteClient("192.168.43.203", 8571, 1928, 1208, beat_interval_s=0.5, beat_timeout_s=1.5)
+c = UdpRemoteClient(os.environ.get("REMOTE_MODEL_HOST", "192.168.3.69"), 8571, 1928, 1208, beat_interval_s=0.5, beat_timeout_s=1.5)
 c.start()
 assert c._session_ready.wait(timeout=10)
 print(f"handshake rtt={c.stats()['rtt_ms']:.0f}ms")

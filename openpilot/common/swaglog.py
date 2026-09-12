@@ -8,7 +8,22 @@ from logging.handlers import BaseRotatingHandler
 import zmq
 
 from openpilot.common.logging_extra import SwagLogger, SwagFormatter, SwagLogFileFormatter
-from openpilot.common.hardware.hw import Paths
+try:
+  from openpilot.common.hardware.hw import Paths
+except ImportError:
+  # 非 Linux 平台(原生 Windows 等)无硬件层: 日志落到用户目录, 无 IPC 日志通道
+  import tempfile
+
+  class Paths:
+    @staticmethod
+    def swaglog_root() -> str:
+      d = os.path.join(tempfile.gettempdir(), "swaglog")
+      os.makedirs(d, exist_ok=True)
+      return d
+
+    @staticmethod
+    def swaglog_ipc() -> str:
+      return ""  # 无 IPC 日志通道; 下方 connect 做容错
 
 
 def get_file_handler():
@@ -86,7 +101,9 @@ class UnixDomainSocketHandler(logging.Handler):
     self.zctx = zmq.Context()
     self.sock = self.zctx.socket(zmq.PUSH)
     self.sock.setsockopt(zmq.LINGER, 10)
-    self.sock.connect(Paths.swaglog_ipc())
+    ipc = Paths.swaglog_ipc()
+    if ipc:
+      self.sock.connect(ipc)
     self.pid = os.getpid()
 
   def emit(self, record):

@@ -35,6 +35,9 @@ from __future__ import annotations
 import json
 import socket
 import struct
+
+import os as _os
+_DEBUG = bool(_os.environ.get("REMOTE_UDP_DEBUG"))
 import threading
 import time
 import zlib
@@ -58,7 +61,7 @@ RESP_OK = 0
 RESP_ERR = 1
 
 DEFAULT_PORT = 8571
-DEFAULT_CHUNK = 32 * 1024
+DEFAULT_CHUNK = 1400   # 必须低于 MTU: >1500 的 UDP 报文走 IP 分片, WSL2 回环直接整体丢弃(实测 2048B 就丢)
 MAX_FRAME = 48 * 1024 * 1024      # hard cap on a reassembled frame
 STALE_PARTIAL_S = 2.0             # incomplete frames older than this are dropped
 
@@ -253,15 +256,19 @@ class Reassembler:
     self.max_frame = max_frame
     self._partials: dict[int, dict] = {}
     self.dropped = 0
+    self.drop_reasons: dict[str, int] = {}
+    self.purged = 0
 
   def feed(self, data: bytes) -> bytes | None:
     magic, mtype, _flags = HDR.unpack_from(data, 0)
     if magic != MAGIC:
       self.dropped += 1
+      self._drop_log("bad_magic")
       return None
     frame_seq, chunk_idx, n_chunks, total_len, crc = CHUNK_HDR.unpack_from(data, HDR.size)
     if total_len > self.max_frame or n_chunks == 0 or chunk_idx >= n_chunks:
       self.dropped += 1
+      self._drop_log(f"bad_geom seq={frame_seq} idx={chunk_idx}/{n_chunks} len={total_len}")
       return None
     p = self._partials.get(frame_seq)
     if p is None:
@@ -271,6 +278,7 @@ class Reassembler:
       # conflicting geometry for the same seq: drop the whole partial
       del self._partials[frame_seq]
       self.dropped += 1
+      self._drop_log(f"geom_conflict seq={frame_seq}")
       return None
     if crc:
       p["crc"] = crc
@@ -278,11 +286,21 @@ class Reassembler:
     if len(p["chunks"]) == p["n"]:
       del self._partials[frame_seq]
       inner = b"".join(p["chunks"][i] for i in range(p["n"]))
-      if len(inner) != p["len"] or frame_crc(inner) != p["crc"]:
+      if len(inner) != p["len"]:
         self.dropped += 1
+        self._drop_log(f"len_mismatch seq={frame_seq} got={len(inner)} want={p['len']}")
+        return None
+      if frame_crc(inner) != p["crc"]:
+        self.dropped += 1
+        self._drop_log(f"crc_fail seq={frame_seq}")
         return None
       return inner
     return None
+
+  def _drop_log(self, reason: str) -> None:
+    self.drop_reasons[reason.split()[0]] = self.drop_reasons.get(reason.split()[0], 0) + 1
+    if _DEBUG:
+      print(f"RXA_DROP {reason}", flush=True)
 
   def purge(self, older_than_s: float = STALE_PARTIAL_S) -> int:
     now = time.monotonic()
@@ -290,6 +308,10 @@ class Reassembler:
     for k in stale:
       del self._partials[k]
     self.dropped += len(stale)
+    if stale:
+      self.purged += len(stale)
+      if _DEBUG:
+        print(f"RXA_PURGE incomplete seqs={stale}", flush=True)
     return len(stale)
 
 
@@ -342,7 +364,7 @@ class UdpRemoteClient:
   temporal state on the server."""
 
   def __init__(self, host: str, port: int = DEFAULT_PORT, cam_w: int = 1928, cam_h: int = 1208, *,
-               timeout_s: float = 3.0, beat_interval_s: float = 0.5, beat_timeout_s: float = 1.5,
+               timeout_s: float = 3.0, beat_interval_s: float = 0.5, beat_timeout_s: float = 4.0,
                chunk_size: int = DEFAULT_CHUNK,
                retry_min_s: float = 0.25, retry_max_s: float = 30.0):
     self.host, self.port = host, port
@@ -354,6 +376,12 @@ class UdpRemoteClient:
     self.retry_min_s, self.retry_max_s = retry_min_s, retry_max_s
 
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # 大缓冲防突发丢包：INFER 单帧 ~1600 datagram；macOS 默认缓冲区极小(发送 9216B)会直接 ENOBUFS
+    for _opt, _sz in ((socket.SO_SNDBUF, 16 << 20), (socket.SO_RCVBUF, 16 << 20)):
+      try:
+        self.sock.setsockopt(socket.SOL_SOCKET, _opt, _sz)
+      except OSError:
+        pass
     self.sock.settimeout(0.05)
     self._send_lock = threading.Lock()
     self._results: deque[dict] = deque()
@@ -412,8 +440,19 @@ class UdpRemoteClient:
     try:
       with self._send_lock:
         for d in datagrams:
-          self.sock.sendto(d, (self.host, self.port))
-    except OSError:
+          # 发送侧背压: socket 带 50ms python 级超时, 服务端排水慢时 sendto 会超时;
+          # 等内核缓冲排水后重发同一片 (上限 ~2s/片, 超出才放弃整帧)
+          for _retry in range(200):
+            try:
+              self.sock.sendto(d, (self.host, self.port))
+              break
+            except socket.timeout:
+              time.sleep(0.01)
+          else:
+            print(f"remote_udp: infer backpressure timeout seq={self._frame_seq}", flush=True)
+            return None
+    except OSError as e:
+      print(f"remote_udp: infer send failed seq={self._frame_seq}: {e}", flush=True)
       return None
     return self._frame_seq
 
@@ -431,8 +470,7 @@ class UdpRemoteClient:
     ev = threading.Event()
     self._ctrl_events[ack_id] = ev
     try:
-      with self._send_lock:
-        self.sock.sendto(encode_ctrl(ack_id, obj), (self.host, self.port))
+      self.sock.sendto(encode_ctrl(ack_id, obj), (self.host, self.port))
       if ev.wait(timeout=timeout_s):
         return self._pending_ctrl.pop(ack_id, None)
       return None
@@ -462,8 +500,7 @@ class UdpRemoteClient:
       now = time.monotonic()
       if now - last_beat_tx >= self.beat_interval_s:
         try:
-          with self._send_lock:
-            self.sock.sendto(encode_beat(self._beat_seq), (self.host, self.port))
+          self.sock.sendto(encode_beat(self._beat_seq), (self.host, self.port))  # 心跳不走 _send_lock: 大帧突发持锁期间心跳必须照发
           self._beat_seq = (self._beat_seq + 1) & 0xFFFFFFFF
         except OSError:
           pass
@@ -471,6 +508,8 @@ class UdpRemoteClient:
 
       if now - last_beat_rx > self.beat_timeout_s:
         # link dead: next infer() consumer sees ready=False; reconnect
+        if _DEBUG:
+          print(f"CLI_DROP: no server beat for {now - last_beat_rx:.1f}s", flush=True)
         self._session_ready.clear()
         self._meta = {}
         continue
@@ -494,6 +533,10 @@ class UdpRemoteClient:
         last_beat_rx = time.monotonic()
         b = decode_beat(data)
         self._server_beat = b
+        if _DEBUG:
+          self._dbg_beat_rx = getattr(self, "_dbg_beat_rx", 0) + 1
+          if self._dbg_beat_rx % 10 == 1:
+            print(f"CLI_BEAT_RX n={self._dbg_beat_rx}", flush=True)
         # one-way estimate refresh; RTT from infer/resp timing lives in stats
       elif mtype == MSG_RESP:
         inner = resp_rx.feed(data)
@@ -506,8 +549,7 @@ class UdpRemoteClient:
       elif mtype == MSG_META:
         # duplicate META (our ACK was lost): re-ACK so the server stops retransmitting
         try:
-          with self._send_lock:
-            self.sock.sendto(encode_ack(MSG_META, decode_meta(data)["ack_id"]), (self.host, self.port))
+          self.sock.sendto(encode_ack(MSG_META, decode_meta(data)["ack_id"]), (self.host, self.port))
         except (OSError, struct.error):
           pass
       elif mtype == MSG_ACK:
@@ -517,8 +559,7 @@ class UdpRemoteClient:
         pass
       elif mtype == MSG_CTRL:
         c = decode_ctrl(data)
-        with self._send_lock:
-          self.sock.sendto(encode_ack(MSG_CTRL, c["ack_id"]), (self.host, self.port))
+        self.sock.sendto(encode_ack(MSG_CTRL, c["ack_id"]), (self.host, self.port))
         self._pending_ctrl[c["ack_id"]] = c["obj"]
         ev = self._ctrl_events.get(c["ack_id"])
         if ev:
@@ -533,8 +574,7 @@ class UdpRemoteClient:
     retry_s = self.retry_min_s
     for _ in range(4):
       try:
-        with self._send_lock:
-          self.sock.sendto(encode_hello(ack_id, self.cam_w, self.cam_h), (self.host, self.port))
+        self.sock.sendto(encode_hello(ack_id, self.cam_w, self.cam_h), (self.host, self.port))
       except OSError:
         return False
       deadline = time.monotonic() + max(retry_s, 0.5)
@@ -558,8 +598,7 @@ class UdpRemoteClient:
         # NTP-style offset estimate; rtt from the handshake itself
         self._rtt_ms = t3 - t0
         self._clock_offset_ms = ((m["server_recv_ts"] - t0) + (m["server_send_ts"] - t3)) / 2.0
-        with self._send_lock:
-          self.sock.sendto(encode_ack(MSG_META, ack_id), (self.host, self.port))
+        self.sock.sendto(encode_ack(MSG_META, ack_id), (self.host, self.port))
         self._meta = m["meta"]
         return True
       retry_s = min(retry_s * 2, 2.0)
@@ -578,7 +617,7 @@ class UdpRemoteServer:
 
   def __init__(self, port: int, meta: dict, infer_fn, *,
                instance: int | None = None, chunk_size: int = DEFAULT_CHUNK,
-               queue_depth: int = 3, beat_interval_s: float = 0.5, beat_timeout_s: float = 1.5,
+               queue_depth: int = 3, beat_interval_s: float = 0.5, beat_timeout_s: float = 4.0,
                beacon_interval_s: float = 5.0, beacon_target: str = "255.255.255.255",
                burst_n: int = 4, burst_interval_s: float = 0.1,
                on_ctrl=None, on_session=None):
@@ -610,6 +649,7 @@ class UdpRemoteServer:
     self._stop = threading.Event()
     self.dropped_frames = 0
 
+    self._dbg_rx = {}
     self._worker = threading.Thread(target=self._work, daemon=True, name="udp-remote-infer")
     self._busy = threading.Event()
     self._gpu_busy = 0
@@ -638,6 +678,12 @@ class UdpRemoteServer:
     self.start()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # 大接收缓冲：INFER 分片突发(~1600 包/帧)在小默认缓冲(尤其 macOS)下整帧丢失
+    for _opt, _sz in ((socket.SO_RCVBUF, 16 << 20), (socket.SO_SNDBUF, 16 << 20)):
+      try:
+        sock.setsockopt(socket.SOL_SOCKET, _opt, _sz)
+      except OSError:
+        pass
     sock.bind(("0.0.0.0", self.port))
     sock.settimeout(0.05)
     try:
@@ -667,6 +713,9 @@ class UdpRemoteServer:
       meta_retries.clear()
       with self._queue_lock:
         self._queue.clear()
+      # 丢弃属于已死会话的待发结果，否则下面的 send 循环会向 None 发包崩溃
+      with self._out_lock:
+        self._out.clear()
       if self.on_session:
         self.on_session(False)
 
@@ -690,10 +739,17 @@ class UdpRemoteServer:
         if now - last_beat_tx >= self.beat_interval_s:
           try:
             sock.sendto(encode_beat(0, self._gpu_busy, self.queue_depth(), self.dropped_frames), session_addr)
-          except OSError:
-            pass
+            if _DEBUG:
+              self._dbg_beat_tx = getattr(self, "_dbg_beat_tx", 0) + 1
+              if self._dbg_beat_tx % 10 == 1:
+                print(f"SRV_BEAT_TX n={self._dbg_beat_tx} to={session_addr}", flush=True)
+          except OSError as e:
+            if _DEBUG:
+              print(f"SRV_BEAT_TX_FAIL: {e}", flush=True)
           last_beat_tx = now
         if now - last_beat_rx > self.beat_timeout_s:
+          if _DEBUG:
+            print(f"SRV_DROP: no client beat for {now - last_beat_rx:.1f}s", flush=True)
           drop_session()
           burst_left = self.burst_n
           next_burst = now
@@ -715,12 +771,13 @@ class UdpRemoteServer:
       # ---- worker results -> wire
       with self._out_lock:
         pending_out, self._out = self._out, []
-      for frame_seq, inner in pending_out:
-        for d in chunk_frame(MSG_RESP, frame_seq, inner, self.chunk_size):
-          try:
-            sock.sendto(d, session_addr)
-          except OSError:
-            break
+      if session_addr is not None:
+        for frame_seq, inner in pending_out:
+          for d in chunk_frame(MSG_RESP, frame_seq, inner, self.chunk_size):
+            try:
+              sock.sendto(d, session_addr)
+            except OSError:
+              break
 
       # ---- receive
       try:
@@ -728,8 +785,15 @@ class UdpRemoteServer:
       except socket.timeout:
         infer_rx.purge()
         continue
-      except OSError:
+      except OSError as e:
+        if _DEBUG:
+          print(f"SRV recv OSError: {e}", flush=True)
         break
+      if _DEBUG and len(data) >= HDR.size:
+        _m = HDR.unpack_from(data, 0)[1]
+        self._dbg_rx[_m] = self._dbg_rx.get(_m, 0) + 1
+        if sum(self._dbg_rx.values()) % 10 == 1:
+          print("SRV_RX:", self._dbg_rx, flush=True)
 
       try:
         magic, mtype, _ = HDR.unpack_from(data, 0)
@@ -744,12 +808,16 @@ class UdpRemoteServer:
       if mtype == MSG_HELLO:
         h = decode_hello(data)
         if session_addr is not None and addr != session_addr:
-          busy = encode_meta(h["ack_id"], _now_ms(), _now_ms(), {"busy": True})
-          try:
-            sock.sendto(busy, addr)
-          except OSError:
-            pass
-          continue
+          # 设计为单客户端链路；旧会话心跳已停顿(客户端重启)时允许新客户端立即接管,
+          # 只有旧会话仍在健康心跳时才回 busy（防多客户端误接）
+          if now - last_beat_rx <= self.beat_interval_s * 2:
+            busy = encode_meta(h["ack_id"], _now_ms(), _now_ms(), {"busy": True})
+            try:
+              sock.sendto(busy, addr)
+            except OSError:
+              pass
+            continue
+          drop_session()
         session_addr = addr
         last_beat_rx = now
         meta = self._meta_src() if callable(self._meta_src) else self._meta_src
