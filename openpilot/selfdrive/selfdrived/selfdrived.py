@@ -654,7 +654,14 @@ class SelfdriveD:
             # False here when NO_ENTRY is present, so this can never engage.
             self.events.add(EventName.buttonEnable)
       elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
-        if self.CP.openpilotLongitudinalControl and self.CP.minEnableSpeed > 0 \
+        if be.type == ButtonType.resumeCruise and CS.vCruise > 250:
+          # Stock GRA: RES with no stored set speed is a no-op. update_events
+          # raises resumeBlocked (NO_ENTRY), but when lateral is already running
+          # can_engage stays True (self.enabled), so the latch must be gated
+          # here too — otherwise longitudinal engages with an unset speed and
+          # the cluster shows ACC active with no set speed and no graphic.
+          pass
+        elif self.CP.openpilotLongitudinalControl and self.CP.minEnableSpeed > 0 \
                 and CS.vEgo < self.CP.minEnableSpeed and self.enabled:
           # Lateral running below the TSK cruise floor (B8: 15 kph): TSK refuses
           # to enter cruise below the floor and faults on standstill engagement,
