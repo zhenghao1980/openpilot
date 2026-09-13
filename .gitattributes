@@ -13,3 +13,7 @@ openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl filter=lfs diff=lfs m
 
 openpilot/selfdrive/car/tests/test_models_segs.txt filter=lfs diff=lfs merge=lfs -text
 openpilot/common/hardware/comma/updater filter=lfs diff=lfs merge=lfs -text
+
+# full CJK fonts stored as plain binaries (not LFS) so forks/clones never depend on LFS storage
+openpilot/selfdrive/assets/fonts/NotoSansCJKsc-Regular.otf -filter -diff -merge -text
+openpilot/selfdrive/assets/fonts/NotoSansCJKtc-Regular.otf -filter -diff -merge -text
