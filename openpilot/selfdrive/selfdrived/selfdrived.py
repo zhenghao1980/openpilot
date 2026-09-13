@@ -669,7 +669,7 @@ class SelfdriveD:
           # to enter cruise below the floor and faults on standstill engagement,
           # so never latch long_wanted and never play the engage chime here.
           self.events.add(EventName.longBelowEngageSpeed)
-        elif can_engage and self.CP.openpilotLongitudinalControl:
+        elif can_engage and self.CP.openpilotLongitudinalControl and CS.cruiseState.available:
           if not self.enabled:
             self.events.add(EventName.buttonEnable)
           elif not self.long_wanted:
@@ -699,6 +699,16 @@ class SelfdriveD:
     # Slowing below minEnableSpeed drops longitudinal only; lateral is unaffected
     # (speedTooLow is suppressed in car_events when separate control is on)
     if self.long_wanted and CS.vEgo < self.CP.minEnableSpeed:
+      self.long_wanted = False
+      if not self.lat_enabled and self.long_enabled:
+        self.events.add(EventName.buttonCancel)
+      elif self.long_enabled:
+        self.events.add(EventName.longDisabled)
+
+    # Cruise main switch (ACC lever) pushed to OFF: stock clears the stored set
+    # speed (card resets vCruise via cruiseState.available) and ACC cannot run.
+    # Drop longitudinal only; stock lane assist is independent of the lever.
+    if self.long_wanted and not CS.cruiseState.available:
       self.long_wanted = False
       if not self.lat_enabled and self.long_enabled:
         self.events.add(EventName.buttonCancel)
