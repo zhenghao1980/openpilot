@@ -158,6 +158,13 @@ class Car:
     self.params.put("CarParamsPersistent", cp_bytes)
 
     self.v_cruise_helper = VCruiseHelper(self.CP)
+    # GRA SET/RES intent captured while longitudinal is inactive; consumed when
+    # longitudinal actually joins. In separate lat/long mode longActive can lag
+    # `enabled` by several frames — by then the button frame is gone and the
+    # long_joined gates below would miss the intent, resuming the stale speed.
+    self._pending_gra_cs = None
+    self._pending_gra_frame = -1
+    self._cs_frame = 0
 
     self.is_metric = self.params.get_bool("IsMetric")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
@@ -190,12 +197,20 @@ class Car:
 
     self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
     cc = self.sm['carControl']
+    self._cs_frame += 1
+    if not cc.longActive and any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
+                                 for b in CS.buttonEvents):
+      # SET/RES released while longitudinal is inactive: stash the CarState carrying
+      # the intent until longitudinal actually joins (may lag `enabled` by frames).
+      self._pending_gra_cs = CS
+      self._pending_gra_frame = self._cs_frame
     long_joined = cc.longActive and not self.CC_prev.longActive
     # The button that triggered engagement sits in the previous frame's CarState
     # (selfdrived acts on it, carControl comes back one frame later)
     set_or_resume_pressed = any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
                                 for b in self.CS_prev.buttonEvents)
-    if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed):
+    pending_gra_valid = self._pending_gra_cs is not None and (self._cs_frame - self._pending_gra_frame) <= 100
+    if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed or pending_gra_valid):
       # Initialize cruise speed when longitudinal actually engages, not on the
       # overall enabled edge: in separate lat/long mode a lateral-only (ALA)
       # engagement must not set/display a cruise speed.
@@ -204,12 +219,17 @@ class Car:
       # initialize_v_cruise applies stock GRA semantics (SET=current speed,
       # RES=restore last). Gas-override resume (enabled stayed True, no button)
       # must NOT re-init, or the driver's set speed would be lost.
-      # Use CarState w/ buttons from the step selfdrived enables on
-      self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode)
+      # Use CarState w/ buttons from the step selfdrived enables on; if the GRA
+      # intent was stashed earlier (longActive lagged enabled), that stashed
+      # CarState is the authoritative one for SET-vs-RES semantics and vEgo.
+      init_cs = self._pending_gra_cs if (pending_gra_valid and not set_or_resume_pressed) else self.CS_prev
+      self.v_cruise_helper.initialize_v_cruise(init_cs, self.experimental_mode)
     elif cc.longActive and any(not b.pressed and b.type == ButtonType.setCruise for b in CS.buttonEvents):
       # Stock GRA semantics: SET while longitudinal is already active re-sets the
       # cruise speed to the current speed
       self.v_cruise_helper.initialize_v_cruise(CS, self.experimental_mode)
+    if cc.longActive:
+      self._pending_gra_cs = None
 
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
