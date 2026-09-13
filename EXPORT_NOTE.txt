@@ -1,0 +1,15 @@
+完整可编译源码树（无 git 历史），2026-09-11 导出
+================================================
+
+主仓:  zhenghao1980/openpilot  master @ 6f6214392（干净工作树实拷）
+子模块（按主仓钉住的 commit）:
+  opendbc_repo   zhenghao1980/opendbc @ 03094369 + 未提交改动:
+                 opendbc/car/volkswagen/mlbcan.py（_ABSTANDSINDEX_LUT 换成 20826 帧重标定版）
+  panda          commaai/panda       @ 75aa44bec9
+  msgq_repo      commaai/msgq        @ 0e266c1dbc
+  rednose_repo   commaai/rednose     @ 28d4a7f69e
+  teleoprtc_repo commaai/teleoprtc   @ 1aa8fc433b
+  tinygrad_repo  tinygrad/tinygrad   @ f6fc4e3f2c
+
+LFS 文件全部为真实二进制（含 CJK 子集字体、big_driving_supercombo.onnx 765MB），
+已从 GitHub LFS 池补齐并扫描验证无指针残留。

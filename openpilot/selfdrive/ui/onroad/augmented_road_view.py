@@ -8,6 +8,11 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.onroad.sp_rocket_fuel import RocketFuel
+from openpilot.selfdrive.ui.onroad.sp_speed_renderer import SpeedRenderer
+from openpilot.selfdrive.ui.onroad.sp_turn_signal import TurnSignalController
+from openpilot.selfdrive.ui.onroad.sp_developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
+from openpilot.selfdrive.ui.onroad.sp_torque_bar import TorqueBar
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
@@ -23,6 +28,8 @@ BORDER_COLORS = {
   UIStatus.DISENGAGED: rl.Color(0x12, 0x28, 0x39, 0xFF),  # Blue for disengaged state
   UIStatus.OVERRIDE: rl.Color(0x89, 0x92, 0x8D, 0xFF),  # Gray for override state
   UIStatus.ENGAGED: rl.Color(0x16, 0x7F, 0x40, 0xFF),  # Green for engaged state
+  UIStatus.LAT_ONLY: rl.Color(0x00, 0xC8, 0xC8, 0xFF),  # Cyan for lat-only state (sunnypilot port)
+  UIStatus.LONG_ONLY: rl.Color(0x96, 0x1C, 0xA8, 0xFF),  # Purple for long-only state (sunnypilot port)
 }
 
 WIDE_CAM_MAX_SPEED = 10.0  # m/s (22 mph)
@@ -47,6 +54,14 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+
+    # Sunnypilot-style HUD overlays (Batch 1 port: speed + rocket fuel)
+    self._sp_speed = SpeedRenderer()
+    self._sp_rocket_fuel = RocketFuel()
+    # SP overlays (Batch 2): turn signals + developer UI + torque bar
+    self._sp_turn_signals = TurnSignalController()
+    self._sp_developer_ui = DeveloperUiRenderer()
+    self._sp_torque_bar = TorqueBar(scale=3.0, always=True)
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -86,6 +101,19 @@ class AugmentedRoadView(CameraView):
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
+    # SP overlays: speed + rocket fuel (Batch 1)
+    self._sp_speed.update()
+    self._sp_speed.render(self._content_rect)
+    self._sp_rocket_fuel.render(self._content_rect, ui_state.sm)
+    self._sp_turn_signals.update()
+    self._sp_turn_signals.render(self._content_rect)
+    if ui_state.torque_bar:
+      _tq_rect = self._content_rect
+      if ui_state.developer_ui in (DeveloperUiState.BOTTOM, DeveloperUiState.BOTH):
+        _tq_rect = rl.Rectangle(self._content_rect.x, self._content_rect.y,
+                                self._content_rect.width, self._content_rect.height - get_bottom_dev_ui_offset())
+      self._sp_torque_bar.render(_tq_rect)
+    self._sp_developer_ui.render(self._content_rect)
 
     # End clipping region
     rl.end_scissor_mode()
