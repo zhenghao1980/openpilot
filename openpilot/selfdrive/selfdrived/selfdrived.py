@@ -133,6 +133,17 @@ class SelfdriveD:
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+    # Separate lateral/longitudinal control state
+    self.separate_lat_long = self.params.get_bool("SeparateLatLongControl")
+    # Latched copy: mode changes only take effect while disengaged, so toggling
+    # the setting mid-drive can not alter the active control behavior
+    self.separate_lat_long_active = self.separate_lat_long
+    self.lat_enabled = False
+    self.long_enabled = False
+    self.lat_wanted = False
+    self.long_wanted = False
+    self.enabled_prev = False
+
     # Determine startup event
     self.startup_event = EventName.startup if build_metadata.openpilot.comma_remote and build_metadata.tested_channel else EventName.startupMaster
     if HARDWARE.get_device_type() == 'mici':
@@ -239,6 +250,7 @@ class SelfdriveD:
 
     # Add car events, ignore if CAN isn't valid
     if CS.canValid:
+      self.car_events.separate_lat_long = self.separate_lat_long_active
       car_events = self.car_events.update(CS, self.CS_prev, self.sm['carControl']).to_msg()
       self.events.add_from_msg(car_events)
 
@@ -249,7 +261,13 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
+      if self.separate_lat_long:
+        # Separate lat/long: brake never disengages openpilot, it only drops
+        # longitudinal (handled in _update_separate_lat_long). Lateral stays
+        # under exclusive control of the ALA button.
+        if CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator:
+          self.events.add(EventName.pedalPressed)
+      elif (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
@@ -456,12 +474,15 @@ class SelfdriveD:
       if self.sm['modelV2'].frameDropPerc > 1:
         self.events.add(EventName.modeldLagging)
 
-    # Decrement personality on distance button press
+    # Distance rocker cycles personality: left (Dist -1) towards aggressive,
+    # right (Dist +1) towards relaxed
     if self.CP.openpilotLongitudinalControl:
-      if any(not be.pressed and be.type == ButtonType.gapAdjustCruise for be in CS.buttonEvents):
-        self.personality = (self.personality - 1) % 3
-        self.params.put('LongitudinalPersonality', self.personality)
-        self.events.add(EventName.personalityChanged)
+      for be in CS.buttonEvents:
+        if not be.pressed and be.type in (ButtonType.gapAdjustCruise, ButtonType.gapAdjustCruiseUp):
+          delta = -1 if be.type == ButtonType.gapAdjustCruise else 1
+          self.personality = (self.personality + delta) % 3
+          self.params.put('LongitudinalPersonality', self.personality)
+          self.events.add(EventName.personalityChanged)
 
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
@@ -530,6 +551,8 @@ class SelfdriveD:
     ss = ss_msg.selfdriveState
     ss.enabled = self.enabled
     ss.active = self.active
+    ss.latEnabled = self.lat_enabled
+    ss.longEnabled = self.long_enabled
     ss.state = self.state_machine.state
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
@@ -558,11 +581,131 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+      self._update_separate_lat_long(CS)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
 
     self.CS_prev = CS
+
+  def _update_separate_lat_long(self, CS):
+    """Manage separate lateral/longitudinal enable toggles when SeparateLatLongControl is enabled.
+
+    Stock behavior: any enable button turns on both lateral and longitudinal together.
+    Separate mode:
+      - ALA (lkas) button toggles lateral on/off.
+      - SET/Resume buttons toggle longitudinal on.
+      - Cancel button disables longitudinal only (lateral stays under exclusive
+        ALA control); if longitudinal was the last active control, fully disengage.
+      - Brake drops longitudinal only; if nothing remains active, fully disengage.
+      - Safety disengagements (door, seatbelt, gear, faults, etc.) reset both toggles.
+    """
+    # Latch the mode while engaged: changing the setting mid-drive must not
+    # alter the active control behavior (e.g. suddenly engaging longitudinal)
+    if not self.enabled:
+      self.separate_lat_long_active = self.separate_lat_long
+
+    if not self.separate_lat_long_active:
+      self.lat_enabled = self.enabled
+      self.long_enabled = self.enabled
+      self.lat_wanted = self.enabled
+      self.long_wanted = self.enabled
+      return
+
+    # Detect falling edge of overall enable due to safety/user disable
+    if not self.enabled and self.enabled_prev:
+      self.lat_wanted = False
+      self.long_wanted = False
+
+    # An engagement request is only honored when it can take effect now. If it
+    # is blocked by a NO_ENTRY condition (wrong gear, below speed, ...), the
+    # wanted flag must NOT stay latched, otherwise it would sneak in later on
+    # an unrelated engagement (e.g. a blocked ALA press in P gear, then lateral
+    # unexpectedly coming on with the next SET press in D).
+    can_engage = self.enabled or not self.events.contains(ET.NO_ENTRY)
+
+    # Process user button inputs
+    for be in CS.buttonEvents:
+      if be.type == ButtonType.lkas:
+        # Act on the falling edge to match panda safety, which sets controls_allowed
+        # on ALA release. Enabling on press would send active HCA_01 while panda
+        # still blocks it, causing counter gaps and a permanent EPS fault.
+        # The button acts on the currently visible state so it can never get out of
+        # sync: if lateral is on, turn it off; if it is off (or a previous
+        # engagement attempt was blocked), try to turn it on.
+        if not be.pressed:
+          if self.lat_enabled:
+            self.lat_wanted = False
+            # Fully disengage (with chime) when lateral was the last active control
+            if not self.long_enabled:
+              self.events.add(EventName.buttonCancel)
+            else:
+              self.events.add(EventName.lkasDisabled)
+          elif can_engage:
+            self.lat_wanted = True
+            if not self.enabled:
+              self.events.add(EventName.buttonEnable)
+            else:
+              self.events.add(EventName.lkasEnabled)
+          else:
+            # Blocked attempt (wrong gear, below speed, ...): request engagement
+            # anyway so the state machine surfaces the matching NO_ENTRY alert
+            # (e.g. "Gear not D" with refuse sound), same as a SET/RES press via
+            # CS.buttonEnable. lat_wanted deliberately stays unset so the request
+            # can not sneak in on a later unrelated engagement. can_engage is only
+            # False here when NO_ENTRY is present, so this can never engage.
+            self.events.add(EventName.buttonEnable)
+      elif be.type in (ButtonType.setCruise, ButtonType.resumeCruise) and not be.pressed:
+        if self.CP.openpilotLongitudinalControl and self.CP.minEnableSpeed > 0 \
+                and CS.vEgo < self.CP.minEnableSpeed and self.enabled:
+          # Lateral running below the TSK cruise floor (B8: 15 kph): TSK refuses
+          # to enter cruise below the floor and faults on standstill engagement,
+          # so never latch long_wanted and never play the engage chime here.
+          self.events.add(EventName.longBelowEngageSpeed)
+        elif can_engage and self.CP.openpilotLongitudinalControl:
+          if not self.enabled:
+            self.events.add(EventName.buttonEnable)
+          elif not self.long_wanted:
+            # Lateral (or nothing latched) already running: chime when longitudinal
+            # joins, mirroring lkasEnabled. No chime on repeated SET speed changes.
+            self.events.add(EventName.longEnabled)
+          self.long_wanted = True
+      elif be.type == ButtonType.cancel and be.pressed:
+        # Separate mode: cancel drops longitudinal only; lateral stays under
+        # exclusive ALA button control. Fully disengage (with chime) only when
+        # longitudinal was the last active control.
+        self.long_wanted = False
+        if not self.lat_enabled and self.long_enabled:
+          self.events.add(EventName.buttonCancel)
+        elif self.long_enabled:
+          self.events.add(EventName.longDisabled)
+
+    # Brake drops longitudinal only; lateral stays under exclusive ALA control.
+    # If nothing remains active, fully disengage with the usual chime.
+    if CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill):
+      self.long_wanted = False
+      if not self.lat_enabled and self.long_enabled:
+        self.events.add(EventName.buttonCancel)
+      elif self.long_enabled:
+        self.events.add(EventName.longDisabled)
+
+    # Slowing below minEnableSpeed drops longitudinal only; lateral is unaffected
+    # (speedTooLow is suppressed in car_events when separate control is on)
+    if self.long_wanted and CS.vEgo < self.CP.minEnableSpeed:
+      self.long_wanted = False
+      if not self.lat_enabled and self.long_enabled:
+        self.events.add(EventName.buttonCancel)
+      elif self.long_enabled:
+        self.events.add(EventName.longDisabled)
+
+    # Re-run state machine in case we injected enable/disable events this frame
+    if (self.events.contains(ET.ENABLE) and not self.enabled) or \
+       (self.events.contains(ET.USER_DISABLE) and self.enabled):
+      self.enabled, self.active = self.state_machine.update(self.events)
+
+    self.lat_enabled = self.enabled and self.lat_wanted
+    self.long_enabled = self.enabled and self.long_wanted
+    self.enabled_prev = self.enabled
 
   def params_thread(self, evt):
     while not evt.is_set():
@@ -571,6 +714,7 @@ class SelfdriveD:
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
+      self.separate_lat_long = self.params.get_bool("SeparateLatLongControl")
       time.sleep(0.1)
 
   def run(self):
