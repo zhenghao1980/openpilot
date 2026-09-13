@@ -131,6 +131,11 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     excessiveActuation @96;
     bigModelLoading @100;
     bigModelFailed @102;
+    lkasEnabled @104;
+    lkasDisabled @105;
+    longEnabled @106;
+    longDisabled @107;
+    longBelowEngageSpeed @108;
 
     lowBatteryDEPRECATED @40;
     soundsUnavailableDEPRECATED @47;
@@ -821,6 +826,10 @@ struct SelfdriveState {
   # configurable driving settings
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
+
+  # separate lateral/longitudinal enable flags (used when SeparateLatLongControl is enabled)
+  latEnabled @14 :Bool;
+  longEnabled @15 :Bool;
 
   enum AudibleAlert {
     none @0;

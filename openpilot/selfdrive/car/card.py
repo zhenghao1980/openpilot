@@ -18,12 +18,14 @@ from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 
 REPLAY = "REPLAY" in os.environ
 
 EventName = log.OnroadEvent.EventName
+ButtonType = car.CarState.ButtonEvent.Type
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
@@ -109,6 +111,12 @@ class Car:
       self.RI = RI
 
     self.CP.alternativeExperience = 0
+    # B8PA: with separate lat/long control, brake and cancel must not clear panda
+    # controls_allowed (brake/cancel drop longitudinal only; lateral stays under
+    # exclusive ALA button control)
+    if self.CP.brand == "volkswagen" and self.params.get_bool("SeparateLatLongControl"):
+      self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.DISABLE_DISENGAGE_ON_BRAKE
+      self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.DISABLE_DISENGAGE_ON_CANCEL
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
     self.CP.passive = not controller_available or self.CP.dashcamOnly
@@ -181,9 +189,27 @@ class Car:
       self.can_log_mono_time = messaging.log_from_bytes(can_strs[0]).logMonoTime
 
     self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
-    if self.sm['carControl'].enabled and not self.CC_prev.enabled:
+    cc = self.sm['carControl']
+    long_joined = cc.longActive and not self.CC_prev.longActive
+    # The button that triggered engagement sits in the previous frame's CarState
+    # (selfdrived acts on it, carControl comes back one frame later)
+    set_or_resume_pressed = any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
+                                for b in self.CS_prev.buttonEvents)
+    if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed):
+      # Initialize cruise speed when longitudinal actually engages, not on the
+      # overall enabled edge: in separate lat/long mode a lateral-only (ALA)
+      # engagement must not set/display a cruise speed.
+      # Gate details: init on a fresh system engagement (CC_prev.enabled=False)
+      # or when longitudinal (re)joins via the user pressing SET/RES — then
+      # initialize_v_cruise applies stock GRA semantics (SET=current speed,
+      # RES=restore last). Gas-override resume (enabled stayed True, no button)
+      # must NOT re-init, or the driver's set speed would be lost.
       # Use CarState w/ buttons from the step selfdrived enables on
       self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode)
+    elif cc.longActive and any(not b.pressed and b.type == ButtonType.setCruise for b in CS.buttonEvents):
+      # Stock GRA semantics: SET while longitudinal is already active re-sets the
+      # cruise speed to the current speed
+      self.v_cruise_helper.initialize_v_cruise(CS, self.experimental_mode)
 
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)

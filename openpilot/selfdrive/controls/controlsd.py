@@ -19,6 +19,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, S
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
+from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -40,12 +42,17 @@ class Controls:
 
     self.sm = messaging.SubMaster(['lateralDelay', 'vehicleParameters', 'lateralTorqueParameters', 'modelV2', 'selfdriveState',
                                    'extrinsicsCalibration', 'deviceMotion', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
-                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
+                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'pandaStates'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+
+    # B8PA/MLB: ungated lane-departure tracker for the cluster FIS red-line display
+    # (plannerd's driverAssistance LDW is gated off while latActive, but stock ALA
+    # shows the red line exactly while steering). Only consumed on MLB below.
+    self.ldw_mlb = LaneDepartureWarning()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -97,9 +104,17 @@ class Controls:
 
     # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
-    CC.latActive = self.sm['selfdriveState'].active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
+    ss = self.sm['selfdriveState']
+    # Never send active control frames while panda is not allowing: blocked active
+    # HCA_01/ACC_01 frames cause CAN counter discontinuities that permanently fault
+    # the EPS/ACC ECUs. Panda states publish at 10Hz, adding at most ~100ms of
+    # engagement latency.
+    IGNORED_SAFETY = (car.CarParams.SafetyModel.silent, car.CarParams.SafetyModel.noOutput)
+    pandas_allowed = self.sm.valid['pandaStates'] and \
+                     all(ps.controlsAllowed for ps in self.sm['pandaStates'] if ps.safetyModel not in IGNORED_SAFETY)
+    CC.latActive = pandas_allowed and ss.latEnabled and ss.active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+    CC.longActive = pandas_allowed and ss.longEnabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -166,7 +181,10 @@ class Controls:
     hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
-    hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
+    hudControl.leadVisible = bool(self.sm['longitudinalPlan'].hasLead or (self.sm.valid['modelV2'] and self.sm['modelV2'].leadsV3 and self.sm['modelV2'].leadsV3[0].prob > 0.5))
+    hudControl.leadDistance = float(self.sm['modelV2'].leadsV3[0].x[0]) if (hudControl.leadVisible and self.sm.valid['modelV2'] and
+                                                                           self.sm['modelV2'].leadsV3) else 0.0
+    hudControl.latEnabled = bool(self.sm['selfdriveState'].latEnabled)
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
@@ -175,6 +193,13 @@ class Controls:
     if self.sm.valid['driverAssistance']:
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
+
+    # B8PA/MLB: recompute lane departure without the latActive gate so the Kombi
+    # FIS red-line display also works while OP is steering (stock ALA behavior).
+    if self.CP.flags & VolkswagenFlags.MLB:
+      self.ldw_mlb.update(self.sm.frame, self.sm['modelV2'], CS, CC, allow_during_lat_active=True)
+      hudControl.leftLaneDepart = self.ldw_mlb.left
+      hudControl.rightLaneDepart = self.ldw_mlb.right
 
     if self.sm['selfdriveState'].active:
       CO = self.sm['carOutput']

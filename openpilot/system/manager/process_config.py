@@ -61,6 +61,9 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
+def dlna_live(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return params.get_bool("DlnaLiveEnabled")
+
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
 
@@ -117,6 +120,7 @@ procs = [
   # debug procs
   NativeProcess("bridge", "openpilot/cereal/messaging", ["./bridge"], notcar),
   PythonProcess("webrtcd", "openpilot.system.webrtc.webrtcd", or_(livestream, notcar)),
+  PythonProcess("dlna_live", "openpilot.system.dlna_live", dlna_live),
   PythonProcess("joystick", "openpilot.tools.joystick.joystick_control", and_(joystick, iscar)),
 ]
 
