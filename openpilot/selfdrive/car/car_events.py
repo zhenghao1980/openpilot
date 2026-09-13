@@ -119,7 +119,10 @@ class CarEvents:
       events.add(EventName.wrongGear)
     if CS.gearShifter == GearShifter.reverse:
       events.add(EventName.reverseGear)
-    if not CS.cruiseState.available:
+    if not CS.cruiseState.available and not self.separate_lat_long:
+      # Separate lat/long mode: the cruise main switch (ACC lever OFF) gates
+      # longitudinal only — stock lane assist works with the lever OFF, and
+      # selfdrived blocks/drops longitudinal on unavailable directly.
       events.add(EventName.wrongCarMode)
     if CS.espDisabled:
       events.add(EventName.espDisabled)
