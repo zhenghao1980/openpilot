@@ -23,6 +23,8 @@ class UIStatus(Enum):
   DISENGAGED = "disengaged"
   ENGAGED = "engaged"
   OVERRIDE = "override"
+  LAT_ONLY = "lat_only"
+  LONG_ONLY = "long_only"
 
 
 class ChestnutState(Enum):
@@ -64,6 +66,8 @@ class UIState:
         "selfdriveState",
         "longitudinalPlan",
         "gpsLocationExternal",
+        "gpsLocation",
+        "lateralTorqueParameters",
         "carOutput",
         "carControl",
         "vehicleParameters",
@@ -105,6 +109,17 @@ class UIState:
     self.is_body: bool | None = False
     self.CP: car.CarParams | None = None
     self.light_sensor: float = -1.0
+
+    # SP-style HUD element toggles (sunnypilot port)
+    self.rainbow_path: bool = self.params.get_bool("RainbowPath")
+    self.rocket_fuel: bool = self.params.get_bool("RocketFuel")
+    self.chevron_metrics: int = int(self.params.get("ChevronInfo") or 0)
+    self.torque_bar: bool = self.params.get_bool("torqueBar")
+    self.true_v_ego_ui: bool = self.params.get_bool("TrueVEgoUI")
+    self.hide_v_ego_ui: bool = self.params.get_bool("HideVEgoUI")
+    self.turn_signals: bool = self.params.get_bool("ShowTurnSignals")
+    self.blindspot: bool = self.params.get_bool("BlindSpot")
+    self.developer_ui: int = int(self.params.get("DevUIInfo") or 0)
 
     self._params_thread: threading.Thread | None = None
 
@@ -187,6 +202,19 @@ class UIState:
 
       if state in (log.SelfdriveState.OpenpilotState.preEnabled, log.SelfdriveState.OpenpilotState.overriding):
         self.status = UIStatus.OVERRIDE
+      elif ss.enabled and self.sm.valid["carControl"]:
+        # 4-state engagement using carControl lat/longActive (no MADS dependency)
+        cc = self.sm["carControl"]
+        lat = cc.latActive
+        lon = cc.longActive
+        if lat and lon:
+          self.status = UIStatus.ENGAGED
+        elif lat:
+          self.status = UIStatus.LAT_ONLY
+        elif lon:
+          self.status = UIStatus.LONG_ONLY
+        else:
+          self.status = UIStatus.ENGAGED
       else:
         self.status = UIStatus.ENGAGED if ss.enabled else UIStatus.DISENGAGED
 
@@ -247,6 +275,17 @@ class UIState:
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed = self.params.get_bool("ExperimentalModeConfirmed")
+
+    # SP HUD element toggles
+    self.rainbow_path = self.params.get_bool("RainbowPath")
+    self.rocket_fuel = self.params.get_bool("RocketFuel")
+    self.chevron_metrics = int(self.params.get("ChevronInfo") or 0)
+    self.torque_bar = self.params.get_bool("torqueBar")
+    self.true_v_ego_ui = self.params.get_bool("TrueVEgoUI")
+    self.hide_v_ego_ui = self.params.get_bool("HideVEgoUI")
+    self.turn_signals = self.params.get_bool("ShowTurnSignals")
+    self.blindspot = self.params.get_bool("BlindSpot")
+    self.developer_ui = int(self.params.get("DevUIInfo") or 0)
     if not self.chestnut_compiled:
       self.chestnut_compiled = chestnut_compiled()
     self.chestnut_active = self.params.get("ChestnutActive")
