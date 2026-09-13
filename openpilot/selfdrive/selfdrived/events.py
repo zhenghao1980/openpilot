@@ -1035,7 +1035,10 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.personalityChanged: {
+    # ET.WARNING only renders while engaged; register PERMANENT too so the
+    # personality change is visible when disengaged (e.g. stalk flicks in P).
     ET.WARNING: personality_changed_alert,
+    ET.PERMANENT: personality_changed_alert,
   },
 
   EventName.userBookmark: {
