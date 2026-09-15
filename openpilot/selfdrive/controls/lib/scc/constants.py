@@ -60,8 +60,10 @@ HYSTERESIS_EPS = 0.1
 # caps how hard the car may ACCELERATE while regaining speed after the turn.
 LEAVING_ACC = 0.5  # m/s^2
 
-# Lower bound for any accel this package may request (matches opendbc ACCEL_MIN,
-# redefined here to keep the scc package free of car-stack imports).
+# Lower bound for any accel this package may request (matches opendbc's global
+# ACCEL_MIN, redefined here to keep the scc package free of car-stack imports).
+# Cars with a weaker per-brand limit (e.g. VW MLB at -2.95) are handled by
+# SccXController resolving get_pid_accel_limits at init and taking the min.
 A_TARGET_MIN = -3.5  # m/s^2
 
 # ENTERING state smooth deceleration lookup (SP): min decel allowed depends on
