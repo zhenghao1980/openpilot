@@ -12,6 +12,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
+from openpilot.selfdrive.controls.lib.scc import SccXController
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -70,6 +71,8 @@ class LongitudinalPlanner:
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
 
+    self.scc_x = SccXController(CP)
+
   def update(self, sm):
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -95,6 +98,15 @@ class LongitudinalPlanner:
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
     steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['vehicleParameters'].angleOffsetDeg
+
+    # SCC-X (fused curve speed control). Inactive/disabled -> outputs stay None
+    # and every line below behaves exactly as stock.
+    scc_x = self.scc_x.update(sm, v_ego, sm['carState'].aEgo, v_cruise,
+                              long_enabled=not long_control_off,
+                              long_override=sm['carControl'].cruiseControl.override,
+                              personality=sm['selfdriveState'].personality)
+    if scc_x.v_cruise_cap is not None:
+      v_cruise = min(v_cruise, scc_x.v_cruise_cap)
 
     if reset_state:
       self.v_desired_filter.x = v_ego
@@ -139,6 +151,11 @@ class LongitudinalPlanner:
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if sm['selfdriveState'].experimentalMode:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
+    if scc_x.a_target is not None:
+      # NOTE: labeled "cruise" because longitudinalPlanSource is a cereal enum;
+      # adding an "scc" value would require a cereal schema change. Debug via
+      # the SCC-X state in the controller instead.
+      candidates.append((scc_x.a_target, LongitudinalPlanSource.cruise, False))
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
