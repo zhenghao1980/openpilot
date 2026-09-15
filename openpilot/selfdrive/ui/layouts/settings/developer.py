@@ -109,6 +109,17 @@ class DeveloperLayout(Widget):
     )
     self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
 
+    self._scc_x_toggle = toggle_item(
+      lambda: tr("SCC-X Curve Speed Control"),
+      description=lambda: tr(
+        "Fused curve-speed control: model-based vision (dual estimators with confidence gating) "
+        "slows the car ahead of sharp curves. Map-based prediction (SCC-M) is reserved but not "
+        "implemented yet. Only affects longitudinal control while engaged."
+      ),
+      initial_state=self._params.get_bool("SccXEnabled"),
+      callback=lambda s: self._params.put_bool("SccXEnabled", s, block=True),
+    )
+
     # sunnypilot onroad display toggles (sp_* ports)
     self._sp_turn_signals = toggle_item(
       lambda: tr("Large Turn Signal Icons"),
@@ -168,6 +179,7 @@ class DeveloperLayout(Widget):
       self._separate_lat_long_toggle,
       self._dlna_live_toggle,
       self._ui_debug_toggle,
+      self._scc_x_toggle,
       self._sp_turn_signals,
       self._sp_blindspot,
       self._sp_torque_bar,
@@ -225,6 +237,7 @@ class DeveloperLayout(Widget):
       ("SeparateLatLongControl", self._separate_lat_long_toggle),
       ("DlnaLiveEnabled", self._dlna_live_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
+      ("SccXEnabled", self._scc_x_toggle),
       ("ShowTurnSignals", self._sp_turn_signals),
       ("BlindSpot", self._sp_blindspot),
       ("torqueBar", self._sp_torque_bar),
