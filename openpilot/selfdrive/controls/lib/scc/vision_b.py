@@ -13,8 +13,10 @@ import numpy as np
 
 from openpilot.selfdrive.controls.lib.scc.constants import EVAL_RANGE, EVAL_STEP, EVAL_START, MIN_LANE_PROB
 
-# lane widths outside [4, 5] m progressively discount lane-line confidence
-_WIDTH_OK = (4.0, 5.0)
+# lane width confidence discount: full confidence for plausible widths
+# (3.5-4.5 m), ramping to zero for implausibly narrow (<3 m) or wide (>5 m)
+_WIDTH_BP = (3.0, 3.5, 4.5, 5.0)
+_WIDTH_FP = (0.0, 1.0, 1.0, 0.0)
 # line stds above ~0.3 m mean the fit is garbage
 _STD_OK = (0.15, 0.3)
 
@@ -62,7 +64,7 @@ class VisionBEstimator:
     for t_check in (0.0, 1.5, 3.0):
       if len(ll_x):
         width_at_t = np.interp(t_check * (v_ego + 7.), ll_x, width_pts)
-        width_mods.append(np.interp(width_at_t, _WIDTH_OK, [1.0, 0.0]))
+        width_mods.append(np.interp(width_at_t, _WIDTH_BP, _WIDTH_FP))
     width_mod = min(width_mods) if width_mods else 0.
     l_prob *= width_mod * np.interp(l_std, _STD_OK, [1.0, 0.0])
     r_prob *= width_mod * np.interp(r_std, _STD_OK, [1.0, 0.0])
@@ -86,6 +88,7 @@ class VisionBEstimator:
     overshoot_idxs = np.nonzero(pred_curvatures >= max_curvature_for_vego)[0]
     if len(overshoot_idxs) > 0:
       self.overshoot = True
-      self.overshoot_distance = max(float(overshoot_idxs[0]) * EVAL_STEP + EVAL_START, EVAL_STEP)
+      # first eval point past the limit; EVAL_RANGE starts at EVAL_START
+      self.overshoot_distance = float(overshoot_idxs[0]) * EVAL_STEP + EVAL_START
       if self.max_pred_curvature > 0:
         self.overshoot_speed = float(np.sqrt(a_lat_reg_max / self.max_pred_curvature))

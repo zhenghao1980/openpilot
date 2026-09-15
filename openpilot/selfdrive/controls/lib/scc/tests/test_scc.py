@@ -231,5 +231,84 @@ class TestControllerStateMachine(unittest.TestCase):
     self.assertGreater(c._vision_b_speed(), 0.)
 
 
+class TestArbiterConfidenceGate(unittest.TestCase):
+  def test_vision_a_gated_below_confidence_threshold(self):
+    a = arbiter.SccArbiter()
+    v, has = a.update(0., 0., 0.5, 10.0, 0.4, 0., 0.)
+    self.assertFalse(has)  # valid speed but confidence below CONF_VISION_A_GATE
+
+  def test_disagreement_respects_vision_a_confidence(self):
+    a = arbiter.SccArbiter()
+    v_b = math.sqrt(2.0 / 0.01)
+    # vision_a disagrees strongly (5.0 << v_b*0.8) but has low confidence:
+    # it must NOT override the high-confidence vision_b estimate
+    v, has = a.update(0., 0., 0.5, 5.0, 0.4, v_b, 0.9)
+    self.assertTrue(has)
+    self.assertEqual(a.source, "vision_b")
+    self.assertAlmostEqual(v, v_b, delta=0.2)
+
+  def test_disagreement_trusts_confident_vision_a(self):
+    a = arbiter.SccArbiter()
+    v_b = math.sqrt(2.0 / 0.01)
+    v, has = a.update(0., 0., 0.5, 5.0, 0.9, v_b, 0.9)
+    self.assertTrue(has)
+    self.assertEqual(a.source, "vision_a")
+    self.assertAlmostEqual(v, 5.0, delta=0.01)
+
+
+class TestVisionBWidthGate(unittest.TestCase):
+  def test_implausibly_narrow_lane_rejected(self):
+    est = vision_b.VisionBEstimator()
+    x = np.linspace(0, 100, 33)
+    half_w = 0.9  # 1.8 m "lane" is physically implausible
+    ll = lambda ys: SimpleNamespace(t=[0.0] * len(ys), x=list(x), y=list(ys))
+    lines = [ll([]), ll(np.zeros(33) - half_w), ll(np.zeros(33) + half_w), ll([])]
+    model = fake_model([], [], lines, lane_probs=[0., 0.95, 0.95, 0.], lane_stds=[0., 0.1, 0.1, 0.])
+    est.update(model, 20.0, 2.0)
+    self.assertEqual(est.confidence, 0.)
+    self.assertEqual(est.max_pred_curvature, 0.)
+
+
+class TestControllerRegression(TestControllerStateMachine):
+  def _stub_estimators(self, c, pred_lat_acc=3.0, overshoot=False, overshoot_distance=20., overshoot_speed=5.):
+    c.frame = 1  # skip the params read in _update_params (no Params in tests)
+    c.vision_a = SimpleNamespace(update=lambda m, v: pred_lat_acc, confidence=0.9)
+    c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0.02, confidence=0.9,
+                                 overshoot=overshoot, overshoot_distance=overshoot_distance,
+                                 overshoot_speed=overshoot_speed)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.arbiter = arbiter.SccArbiter()
+
+  def _sm(self):
+    return {'modelV2': fake_model([0.0] * 10, [30.0] * 10),
+            'controlsState': SimpleNamespace(curvature=0.0)}
+
+  def test_v_cruise_cap_never_negative(self):
+    # regression: hard overshoot decel * NO_OVERSHOOT_TIME_HORIZON pushed the
+    # cap below zero, commanding decel toward a negative target speed
+    c = self._make()
+    c.state = "entering"
+    self._stub_estimators(c, overshoot=True, overshoot_distance=20., overshoot_speed=5.)
+    out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
+    self.assertIsNotNone(out.v_cruise_cap)
+    self.assertGreaterEqual(out.v_cruise_cap, 0.)
+
+  def test_overshoot_decel_clamped_to_physical_limit(self):
+    c = self._make()
+    c.state = "entering"
+    self._stub_estimators(c, overshoot=True, overshoot_distance=20., overshoot_speed=5.)
+    out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
+    # raw a_required would be (5^2-30^2)/(2*20) = -21.9; must clamp to A_TARGET_MIN
+    self.assertAlmostEqual(out.a_target, constants.A_TARGET_MIN, places=5)
+
+  def test_personality_out_of_range_clamped(self):
+    c = self._make()
+    self._stub_estimators(c, pred_lat_acc=0.0)
+    c._update_estimates(self._sm()['modelV2'], personality=99)
+    self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[-1])
+    c._update_estimates(self._sm()['modelV2'], personality=-3)
+    self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[0])
+
+
 if __name__ == "__main__":
   unittest.main()

@@ -6,7 +6,7 @@ and release back to cruise must persist for a few frames before it takes
 effect (kills single-frame model hallucinations and map data jumps).
 """
 from openpilot.selfdrive.controls.lib.scc.constants import (
-  CONF_VISION_B_GATE, CURVE_MIN_SPEED, HYSTERESIS_DOWN_FRAMES, HYSTERESIS_EPS, HYSTERESIS_UP_FRAMES,
+  CONF_VISION_A_GATE, CONF_VISION_B_GATE, CURVE_MIN_SPEED, HYSTERESIS_DOWN_FRAMES, HYSTERESIS_EPS, HYSTERESIS_UP_FRAMES,
 )
 
 
@@ -23,7 +23,7 @@ class SccArbiter:
     self._have_target = False
 
   def _vision_winner(self, v_a: float, c_a: float, v_b: float, c_b: float) -> float:
-    valid_a = v_a > 0.
+    valid_a = v_a > 0. and c_a >= CONF_VISION_A_GATE
     valid_b = v_b > 0. and c_b >= CONF_VISION_B_GATE
     if valid_b:
       self.source = "vision_b"
@@ -32,7 +32,7 @@ class SccArbiter:
         self.source = "vision_a"
         return v_a
       return v_b
-    if valid_a and c_a > 0.3:
+    if valid_a:
       self.source = "vision_a"
       return v_a
     return 0.
