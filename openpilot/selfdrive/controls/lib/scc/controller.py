@@ -87,8 +87,12 @@ class SccXController:
       self.enabled = self.params.get_bool(SCC_X_ENABLED_PARAM)
 
   def _update_estimates(self, model_v2, personality) -> None:
-    # clamp defensively: an out-of-range personality must never crash plannerd
-    personality_idx = min(max(int(personality), 0), len(A_LAT_REG_MAX_BY_PERSONALITY) - 1)
+    # personality comes from sm['selfdriveState'] as a capnp _DynamicEnum,
+    # which does NOT support int(); its .raw holds the schema ordinal (same
+    # conversion stock controlsd uses). Plain ints also pass through (tests).
+    # Clamp defensively: an out-of-range value must never crash plannerd.
+    personality_raw = getattr(personality, 'raw', personality)
+    personality_idx = min(max(int(personality_raw), 0), len(A_LAT_REG_MAX_BY_PERSONALITY) - 1)
     self._a_lat_reg_max = A_LAT_REG_MAX_BY_PERSONALITY[personality_idx]
     self._max_pred_lat_acc = self.vision_a.update(model_v2, self._v_ego)
     self.vision_b.update(model_v2, self._v_ego, self._a_lat_reg_max)

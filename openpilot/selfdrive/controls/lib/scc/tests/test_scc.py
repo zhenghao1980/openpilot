@@ -350,6 +350,18 @@ class TestControllerRegression(TestControllerStateMachine):
     c._update_estimates(self._sm()['modelV2'], personality=-3)
     self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[0])
 
+  def test_personality_accepts_capnp_dynamic_enum(self):
+    # regression: on-device personality is a capnp _DynamicEnum which raises
+    # TypeError on int() - must convert via .raw (crashed plannerd on device)
+    class FakeDynamicEnum:
+      def __init__(self, raw): self.raw = raw
+    c = self._make()
+    self._stub_estimators(c, pred_lat_acc=0.0)
+    c._update_estimates(self._sm()['modelV2'], personality=FakeDynamicEnum(2))
+    self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[2])
+    c._update_estimates(self._sm()['modelV2'], personality=FakeDynamicEnum(99))
+    self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[-1])
+
 
 if __name__ == "__main__":
   unittest.main()
