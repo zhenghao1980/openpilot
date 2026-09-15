@@ -284,14 +284,44 @@ class TestControllerRegression(TestControllerStateMachine):
             'controlsState': SimpleNamespace(curvature=0.0)}
 
   def test_v_cruise_cap_never_negative(self):
-    # regression: hard overshoot decel * NO_OVERSHOOT_TIME_HORIZON pushed the
-    # cap below zero, commanding decel toward a negative target speed
+    # regression: smooth decel (a_target=-1.0) * NO_OVERSHOOT_TIME_HORIZON on a
+    # very low curve speed pushed the cap below zero, commanding decel toward
+    # a negative target speed
+    c = self._make()
+    c.state = "entering"
+    self._stub_estimators(c, overshoot=False)
+    c.vision_b.max_pred_curvature = 0.5  # v_allow = sqrt(2/0.5) = 2.0 -> arbiter floor 2.8
+    out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
+    self.assertIsNotNone(out.v_cruise_cap)
+    self.assertGreaterEqual(out.v_cruise_cap, 0.)  # 2.8 + (-1.0)*4 = -1.2 without the clamp
+
+  def test_smooth_decel_cap_uses_sp_margin(self):
+    # no overshoot: SP semantics, cap = curve speed + a_target * 4 s
+    c = self._make()
+    c.state = "entering"
+    self._stub_estimators(c, overshoot=False)  # v_arb = 10, a_target = -1.0
+    out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
+    self.assertAlmostEqual(out.v_cruise_cap, 10.0 + (-1.0) * constants.NO_OVERSHOOT_TIME_HORIZON, places=5)
+
+  def test_overshoot_cap_uses_dp_semantics(self):
+    # overshoot active: a_target already carries the exact kinematic decel, so
+    # the cap must be the overshoot speed itself - no 4 s margin on top
     c = self._make()
     c.state = "entering"
     self._stub_estimators(c, overshoot=True, overshoot_distance=20., overshoot_speed=5.)
     out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
-    self.assertIsNotNone(out.v_cruise_cap)
-    self.assertGreaterEqual(out.v_cruise_cap, 0.)
+    self.assertAlmostEqual(out.v_cruise_cap, 5.0, places=5)
+
+  def test_overshoot_cap_respects_lower_arbiter_target(self):
+    # vision_a disagrees with the lane fit and wins the arbitration
+    # (v_a = 8*sqrt(2/3) = 6.53 < v_b * 0.8 = 8.0): the cap must follow the
+    # arbiter-adopted 6.53, not the higher overshoot_speed of 8.0
+    c = self._make()
+    c.state = "entering"
+    self._stub_estimators(c, pred_lat_acc=3.0, overshoot=True, overshoot_distance=20., overshoot_speed=8.)
+    out = c.update(self._sm(), 8.0, 0., 33.0, True, False, 1)
+    self.assertAlmostEqual(out.debug_v_target, 8.0 * math.sqrt(2.0 / 3.0), places=5)
+    self.assertAlmostEqual(out.v_cruise_cap, out.debug_v_target, places=5)
 
   def test_overshoot_decel_clamped_to_physical_limit(self):
     c = self._make()

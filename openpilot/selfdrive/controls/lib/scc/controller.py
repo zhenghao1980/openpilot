@@ -209,13 +209,23 @@ class SccXController:
       out.active = True
       out.a_target = self._a_target
       if self.state == "entering":
-        # follow the smooth decel toward the curve speed, with the SP
-        # no-overshoot margin; never above the user's cruise setting
         v_target = max(self._v_arb, CURVE_MIN_SPEED) if self._has_target else 0.
         if v_target > 0.:
-          # a_target is negative here, so the no-overshoot margin can push the
-          # expression below zero; a speed cap must never go negative
-          out.v_cruise_cap = min(self._v_cruise, max(0., v_target + self._a_target * NO_OVERSHOOT_TIME_HORIZON))
+          if self.vision_b.overshoot and self.vision_b.overshoot_speed > 0.:
+            # DP overshoot semantics: a_target is already the exact kinematic
+            # decel to reach overshoot_speed at the curve entry point, so the
+            # cap is the overshoot speed itself. Applying SP's 4 s margin on
+            # top would double-count the deceleration and over-slow the car.
+            # Still respect a lower arbiter-adopted target (vision_a may see
+            # something worse than the lane fit does).
+            v_cap = max(CURVE_MIN_SPEED, min(self.vision_b.overshoot_speed, v_target))
+            out.v_cruise_cap = min(self._v_cruise, v_cap)
+          else:
+            # SP semantics: follow the smooth decel toward the curve speed,
+            # with the no-overshoot margin; never above the user's cruise
+            # setting. a_target is negative here, so the margin can push the
+            # expression below zero; a speed cap must never go negative.
+            out.v_cruise_cap = min(self._v_cruise, max(0., v_target + self._a_target * NO_OVERSHOOT_TIME_HORIZON))
       else:
         # hold the speed the current curvature permits
         v_cur = self._current_curve_speed()
