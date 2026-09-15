@@ -41,17 +41,28 @@ PRED_LAT_ACC_PERCENTILE = 97
 
 # Arbiter: minimum vision-B confidence to prefer it over vision-A
 CONF_VISION_B_GATE = 0.6
+# Arbiter: minimum vision-A confidence to adopt (or disagree with) its speed.
+# vision_a's consistency confidence starts at 0.5 and drops below this for a
+# few frames after a large frame-to-frame jump (hallucination signature).
+CONF_VISION_A_GATE = 0.5
 
-# Arbiter hysteresis, in model frames (DT_MDL = 0.05 s -> 5 frames = 0.25 s,
-# 10 frames = 0.5 s). Kills single-frame model hallucinations and map jumps.
-HYSTERESIS_DOWN_FRAMES = 5   # confirm before adopting a lower target speed
+# Arbiter hysteresis, in model frames (DT_MDL = 0.05 s -> 2 frames = 0.1 s,
+# 10 frames = 0.5 s). Asymmetric on purpose: adopting a LOWER target only
+# waits long enough to kill single-frame hallucinations (braking late is the
+# dangerous direction), while releasing back to cruise stays conservative.
+HYSTERESIS_DOWN_FRAMES = 2   # confirm before adopting a lower target speed
 HYSTERESIS_UP_FRAMES = 10    # confirm before releasing back to cruise
 # Speed changes smaller than this [m/s] are treated as "unchanged" so the
 # pending counters don't wind up on jitter.
 HYSTERESIS_EPS = 0.1
 
-# Minimum accel the controller may command while turning ( comfort floor )
-LEAVING_ACC = 0.5  # m/s^2, regain speed after the turn
+# LEAVING state accel ceiling [m/s^2]: injected as a min()-candidate, so it only
+# caps how hard the car may ACCELERATE while regaining speed after the turn.
+LEAVING_ACC = 0.5  # m/s^2
+
+# Lower bound for any accel this package may request (matches opendbc ACCEL_MIN,
+# redefined here to keep the scc package free of car-stack imports).
+A_TARGET_MIN = -3.5  # m/s^2
 
 # ENTERING state smooth deceleration lookup (SP): min decel allowed depends on
 # how much lat-acc is predicted ahead.

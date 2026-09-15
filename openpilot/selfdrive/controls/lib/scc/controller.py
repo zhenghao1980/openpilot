@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from openpilot.selfdrive.controls.lib.scc.arbiter import SccArbiter
 from openpilot.selfdrive.controls.lib.scc.constants import (
-  A_LAT_REG_MAX_BY_PERSONALITY, ABORT_ENTERING_PRED_LAT_ACC_TH, CURVE_MIN_SPEED,
+  A_LAT_REG_MAX_BY_PERSONALITY, A_TARGET_MIN, ABORT_ENTERING_PRED_LAT_ACC_TH, CURVE_MIN_SPEED,
   ENTERING_PRED_LAT_ACC_TH, ENTERING_SMOOTH_DECEL_BP, ENTERING_SMOOTH_DECEL_V,
   FINISH_LAT_ACC_TH, LEAVING_ACC, LEAVING_LAT_ACC_TH, MIN_V, NO_OVERSHOOT_TIME_HORIZON,
   SCC_X_ENABLED_PARAM, TURNING_ACC_BP, TURNING_ACC_V, TURNING_LAT_ACC_TH,
@@ -73,7 +73,9 @@ class SccXController:
       self.enabled = self.params.get_bool(SCC_X_ENABLED_PARAM)
 
   def _update_estimates(self, model_v2, personality) -> None:
-    self._a_lat_reg_max = A_LAT_REG_MAX_BY_PERSONALITY[int(personality)]
+    # clamp defensively: an out-of-range personality must never crash plannerd
+    personality_idx = min(max(int(personality), 0), len(A_LAT_REG_MAX_BY_PERSONALITY) - 1)
+    self._a_lat_reg_max = A_LAT_REG_MAX_BY_PERSONALITY[personality_idx]
     self._max_pred_lat_acc = self.vision_a.update(model_v2, self._v_ego)
     self.vision_b.update(model_v2, self._v_ego, self._a_lat_reg_max)
     self.map_est.update(self._v_ego, self._a_ego)
@@ -145,6 +147,10 @@ class SccXController:
       if self.vision_b.overshoot and self.vision_b.overshoot_distance > 0. and self.vision_b.overshoot_speed > 0.:
         v_overshoot = min(self.vision_b.overshoot_speed, self._v_cruise)
         a_required = (v_overshoot ** 2 - self._v_ego ** 2) / (2. * self.vision_b.overshoot_distance)
+        # unclamped a_required goes to -inf as distance -> 0; keep the request
+        # within what the car can physically do so downstream math (including
+        # the no-overshoot cap below) sees a realistic decel
+        a_required = max(a_required, A_TARGET_MIN)
         a_target = min(a_target, a_required)
       self._a_target = a_target
     elif self.state == "turning":
@@ -192,7 +198,9 @@ class SccXController:
         # no-overshoot margin; never above the user's cruise setting
         v_target = max(self._v_arb, CURVE_MIN_SPEED) if self._has_target else 0.
         if v_target > 0.:
-          out.v_cruise_cap = min(self._v_cruise, v_target + self._a_target * NO_OVERSHOOT_TIME_HORIZON)
+          # a_target is negative here, so the no-overshoot margin can push the
+          # expression below zero; a speed cap must never go negative
+          out.v_cruise_cap = min(self._v_cruise, max(0., v_target + self._a_target * NO_OVERSHOOT_TIME_HORIZON))
       else:
         # hold the speed the current curvature permits
         v_cur = self._current_curve_speed()
