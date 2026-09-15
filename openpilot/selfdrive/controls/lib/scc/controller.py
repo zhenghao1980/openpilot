@@ -56,6 +56,20 @@ class SccXController:
     self.frame = -1
     self.state = "disabled"
 
+    # Per-car decel limit: some brands clamp below the global -3.5 (VW MLB at
+    # -2.95). The overshoot math must only assume braking the car will actually
+    # deliver; planner clips at the global value, the car controller clamps
+    # again per-car, so without this SCC-X would plan to arrive ~20% too hot
+    # on MLB. Falls back to the global default if the car stack is unavailable.
+    self._a_target_min = A_TARGET_MIN
+    try:
+      from opendbc.car.car_helpers import interfaces  # lazy: keeps module importable in tests
+      if CP.carFingerprint in interfaces:
+        car_min = interfaces[CP.carFingerprint].get_pid_accel_limits(CP, 0., 0.)[0]
+        self._a_target_min = min(car_min, A_TARGET_MIN)
+    except (ImportError, AttributeError):
+      pass
+
     self._v_ego = 0.
     self._a_ego = 0.
     self._v_cruise = 0.
@@ -148,9 +162,10 @@ class SccXController:
         v_overshoot = min(self.vision_b.overshoot_speed, self._v_cruise)
         a_required = (v_overshoot ** 2 - self._v_ego ** 2) / (2. * self.vision_b.overshoot_distance)
         # unclamped a_required goes to -inf as distance -> 0; keep the request
-        # within what the car can physically do so downstream math (including
-        # the no-overshoot cap below) sees a realistic decel
-        a_required = max(a_required, A_TARGET_MIN)
+        # within what the car can physically do (per-car limit resolved at
+        # init, e.g. MLB -2.95) so downstream math (including the no-overshoot
+        # cap below) sees a realistic decel
+        a_required = max(a_required, getattr(self, '_a_target_min', A_TARGET_MIN))
         a_target = min(a_target, a_required)
       self._a_target = a_target
     elif self.state == "turning":
