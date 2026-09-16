@@ -332,9 +332,9 @@ class TestControllerRegression(TestControllerStateMachine):
     self.assertAlmostEqual(out.a_target, constants.A_TARGET_MIN, places=5)
 
   def test_overshoot_decel_honors_per_car_limit(self):
-    # cars with a weaker per-brand decel limit (VW MLB: -2.95) must clamp
-    # there, not at the global -3.5 - otherwise the overshoot math assumes
-    # braking the car cannot deliver
+    # a car with a weaker per-brand decel limit must clamp there, not at the
+    # global -3.5 - otherwise the overshoot math assumes braking the car
+    # cannot deliver
     c = self._make()
     c.state = "entering"
     c._a_target_min = -2.95
