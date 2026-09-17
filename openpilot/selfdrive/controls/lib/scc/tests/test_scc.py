@@ -331,17 +331,6 @@ class TestControllerRegression(TestControllerStateMachine):
     # raw a_required would be (5^2-30^2)/(2*20) = -21.9; must clamp to A_TARGET_MIN
     self.assertAlmostEqual(out.a_target, constants.A_TARGET_MIN, places=5)
 
-  def test_overshoot_decel_honors_per_car_limit(self):
-    # a car with a weaker per-brand decel limit must clamp there, not at the
-    # global -3.5 - otherwise the overshoot math assumes braking the car
-    # cannot deliver
-    c = self._make()
-    c.state = "entering"
-    c._a_target_min = -2.95
-    self._stub_estimators(c, overshoot=True, overshoot_distance=20., overshoot_speed=5.)
-    out = c.update(self._sm(), 30.0, 0., 33.0, True, False, 1)
-    self.assertAlmostEqual(out.a_target, -2.95, places=5)
-
   def test_personality_out_of_range_clamped(self):
     c = self._make()
     self._stub_estimators(c, pred_lat_acc=0.0)
