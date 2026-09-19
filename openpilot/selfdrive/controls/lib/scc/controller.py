@@ -20,7 +20,7 @@ from openpilot.selfdrive.controls.lib.scc.arbiter import SccArbiter
 from openpilot.selfdrive.controls.lib.scc.constants import (
   A_LAT_REG_MAX_BY_PERSONALITY, A_TARGET_MIN, ABORT_ENTERING_PRED_LAT_ACC_TH, CURVE_MIN_SPEED,
   ENTERING_PRED_LAT_ACC_TH, ENTERING_SMOOTH_DECEL_BP, ENTERING_SMOOTH_DECEL_V,
-  FINISH_LAT_ACC_TH, LEAVING_ACC, LEAVING_LAT_ACC_TH, MIN_V, NO_OVERSHOOT_TIME_HORIZON,
+  FINISH_LAT_ACC_TH, LEAVING_ACC, LEAVING_FINISH_FRAMES, LEAVING_LAT_ACC_TH, MIN_V, NO_OVERSHOOT_TIME_HORIZON,
   SCC_X_ENABLED_PARAM, TURNING_ACC_BP, TURNING_ACC_V, TURNING_LAT_ACC_TH,
 )
 from openpilot.selfdrive.controls.lib.scc.map import MapCurveEstimator
@@ -65,6 +65,7 @@ class SccXController:
     self._v_arb = 0.
     self._has_target = False
     self._a_target = 0.
+    self._leaving_finish_cnt = 0  # frames the leaving finish/escape condition has held
 
   # -- helpers ---------------------------------------------------------------
 
@@ -78,6 +79,10 @@ class SccXController:
     # conversion stock controlsd uses). Plain ints also pass through (tests).
     # Clamp defensively: an out-of-range value must never crash plannerd.
     personality_raw = getattr(personality, 'raw', personality)
+    # R-09: a None personality (mock / future schema change) must fall back to
+    # standard, not crash plannerd in int() before the clamp can run
+    if personality_raw is None:
+      personality_raw = 1
     personality_idx = min(max(int(personality_raw), 0), len(A_LAT_REG_MAX_BY_PERSONALITY) - 1)
     self._a_lat_reg_max = A_LAT_REG_MAX_BY_PERSONALITY[personality_idx]
     self._max_pred_lat_acc = self.vision_a.update(model_v2, self._v_ego)
@@ -90,18 +95,24 @@ class SccXController:
     )
 
   def _vision_a_speed(self) -> float:
-    # convert predicted lat-acc back to the speed it would permit at v_ego:
-    # a_pred = v^2 * kappa  ->  v_allow = v_ego * sqrt(a_max / a_pred)
-    # A speed at/above the user's cruise setting means "this source imposes no
-    # constraint" and must report 0, otherwise the arbiter adopts a huge
-    # baseline and every real slowdown gets eaten by the down-hysteresis.
-    if self._max_pred_lat_acc <= 0.:
+    # convert predicted lat-acc back to the speed it would permit:
+    # a_pred = v_plan^2 * kappa  ->  v_allow = v_plan * sqrt(a_max / a_pred),
+    # where v_plan is the model's planned speed at the percentile point
+    # (N-04: using v_ego here mis-scales the limit both ways - up to ~30%
+    # under-braking while decelerating into the curve). A speed at/above the
+    # user's cruise setting means "this source imposes no constraint" and must
+    # report 0, otherwise the arbiter adopts a huge baseline and every real
+    # slowdown gets eaten by the down-hysteresis.
+    if not np.isfinite(self._max_pred_lat_acc) or self._max_pred_lat_acc <= 0.:
       return 0.
-    v_allow = self._v_ego * float(np.sqrt(self._a_lat_reg_max / self._max_pred_lat_acc))
+    v_ref = getattr(self.vision_a, 'v_at_p97', 0.)  # older stubs: fall back to v_ego
+    if v_ref <= 0.:
+      v_ref = self._v_ego
+    v_allow = v_ref * float(np.sqrt(self._a_lat_reg_max / self._max_pred_lat_acc))
     return v_allow if v_allow < self._v_cruise else 0.
 
   def _vision_b_speed(self) -> float:
-    if self.vision_b.max_pred_curvature <= 0.:
+    if not np.isfinite(self.vision_b.max_pred_curvature) or self.vision_b.max_pred_curvature <= 0.:
       return 0.
     v_allow = float(np.sqrt(self._a_lat_reg_max / self.vision_b.max_pred_curvature))
     return v_allow if v_allow < self._v_cruise else 0.
@@ -134,11 +145,30 @@ class SccXController:
       elif self.state == "turning":
         if self._current_lat_acc <= LEAVING_LAT_ACC_TH:
           self.state = "leaving"
+          self._leaving_finish_cnt = 0
       elif self.state == "leaving":
         if self._current_lat_acc >= TURNING_LAT_ACC_TH:
           self.state = "turning"
-        elif self._current_lat_acc < FINISH_LAT_ACC_TH:
-          self.state = "enabled"
+          self._leaving_finish_cnt = 0
+        else:
+          # M-02/M-09: finishing requires BOTH the current lat-acc to have
+          # decayed below FINISH AND no new curve predicted ahead, held for
+          # LEAVING_FINISH_FRAMES. Escape path: if the prediction says the
+          # road ahead is clean (< ABORT_ENTERING) for the same hold time,
+          # leave even while the current lat-acc sits in the [FINISH, TURNING)
+          # band (within the lat-acc budget) - otherwise the state latches in
+          # leaving and the car keeps the 0.5 m/s^2 accel ceiling long after
+          # the curve is gone.
+          finish_ok = (self._current_lat_acc < FINISH_LAT_ACC_TH and
+                       self._max_pred_lat_acc < ENTERING_PRED_LAT_ACC_TH)
+          escape_ok = self._max_pred_lat_acc < ABORT_ENTERING_PRED_LAT_ACC_TH
+          if finish_ok or escape_ok:
+            self._leaving_finish_cnt += 1
+            if self._leaving_finish_cnt >= LEAVING_FINISH_FRAMES:
+              self.state = "enabled"
+              self._leaving_finish_cnt = 0
+          else:
+            self._leaving_finish_cnt = 0
     else:
       if long_enabled and self.enabled:
         self.state = "overriding" if long_override else "enabled"
@@ -189,7 +219,13 @@ class SccXController:
       return SccXOutput(state=self.state)
 
     self._update_estimates(sm['modelV2'], personality)
+    prev_state = self.state
     self._update_state(long_enabled, long_override)
+    if self.state == "disabled" and prev_state != "disabled":
+      # M-07: dropping out (long disable / feature off) must re-arm the arbiter
+      # so a stale adopted speed can't anchor the next engagement
+      self.arbiter.reset()
+      self._leaving_finish_cnt = 0
     self._update_solution()
     self.frame += 1
 

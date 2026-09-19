@@ -56,6 +56,16 @@ HYSTERESIS_UP_FRAMES = 10    # confirm before releasing back to cruise
 # pending counters don't wind up on jitter.
 HYSTERESIS_EPS = 0.1
 
+# Frames without any valid source before the arbiter drops its adopted anchor
+# (M-04). ~250 ms of grace kills one-frame dropouts re-arming first-frame
+# adoption; longer absence fully re-arms.
+NONE_RESET_FRAMES = 5
+
+# LEAVING -> enabled requires the finish/escape condition to hold this many
+# consecutive frames (M-02/M-09). Single-frame finish both released
+# acceleration too early and latched the state in the [FINISH, TURNING) band.
+LEAVING_FINISH_FRAMES = 5   # ~250 ms at DT_MDL
+
 # LEAVING state accel ceiling [m/s^2]: injected as a min()-candidate, so it only
 # caps how hard the car may ACCELERATE while regaining speed after the turn.
 LEAVING_ACC = 0.5  # m/s^2

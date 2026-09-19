@@ -13,6 +13,10 @@ from openpilot.selfdrive.controls.lib.scc.constants import PRED_LAT_ACC_PERCENTI
 class VisionAEstimator:
   def __init__(self):
     self.max_pred_lat_acc = 0.
+    # plan speed at the percentile point [m/s]; the controller needs this to
+    # convert predicted lat-acc back to an allowed speed with the same
+    # reference velocity the prediction was built with (N-04)
+    self.v_at_p97 = 0.
     self._prev_max_pred_lat_acc = 0.
     # consistency-based confidence in [0.3, 1.0]; starts optimistic
     self.confidence = 0.5
@@ -25,12 +29,25 @@ class VisionAEstimator:
     rate_plan = np.array(np.abs(model_v2.orientationRate.z))
     vel_plan = np.maximum(np.array(model_v2.velocity.x), 0.)
 
-    predicted = rate_plan * vel_plan
-    self.max_pred_lat_acc = float(np.percentile(predicted, PRED_LAT_ACC_PERCENTILE)) if len(predicted) else 0.
+    # N-01: one corrupt model frame (NaN/Inf) must not poison the estimate.
+    # Without this, np.percentile returns NaN and confidence enters a NaN
+    # absorbing state (fail-silent loss of this estimator for the whole drive).
+    predicted = np.nan_to_num(rate_plan * vel_plan, nan=0.0, posinf=0.0, neginf=0.0)
+    if len(predicted):
+      p = float(np.percentile(predicted, PRED_LAT_ACC_PERCENTILE))
+      self.max_pred_lat_acc = p
+      self.v_at_p97 = float(vel_plan[int(np.argmin(np.abs(predicted - p)))])
+    else:
+      self.max_pred_lat_acc = 0.
+      self.v_at_p97 = 0.
 
     # confidence: punish large frame-to-frame swings (hallucination signature)
     jump = abs(self.max_pred_lat_acc - self._prev_max_pred_lat_acc)
-    target = float(np.clip(1.0 - jump / 2.0, 0.3, 1.0))
+    if not np.isfinite(jump):
+      # belt-and-braces against the NaN absorbing state
+      target = 0.3
+    else:
+      target = float(np.clip(1.0 - jump / 2.0, 0.3, 1.0))
     self.confidence = 0.8 * self.confidence + 0.2 * target
     self._prev_max_pred_lat_acc = self.max_pred_lat_acc
 
