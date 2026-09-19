@@ -24,6 +24,13 @@ from openpilot.selfdrive.car.cruise import VCruiseHelper
 
 REPLAY = "REPLAY" in os.environ
 
+# R-03: GRA SET/RES intent stash window, in 100 Hz card frames. Measured
+# SET/RES-release -> longActive-rise lag on route 0000009c--7e23e61b73 segs 1-3
+# is 4-8 ms = <=1 frame (analyze_gra_longactive_lag.py, n=6 paired, p99=1).
+# 20 frames (200 ms) gives 20x headroom without letting a blocked press from a
+# second ago sneak in as a stale intent.
+PENDING_GRA_WINDOW_FRAMES = 20
+
 EventName = log.OnroadEvent.EventName
 ButtonType = car.CarState.ButtonEvent.Type
 
@@ -162,6 +169,7 @@ class Car:
     # longitudinal actually joins. In separate lat/long mode longActive can lag
     # `enabled` by several frames — by then the button frame is gone and the
     # long_joined gates below would miss the intent, resuming the stale speed.
+    # Window = PENDING_GRA_WINDOW_FRAMES (sizing evidence there, R-03).
     self._pending_gra_cs = None
     self._pending_gra_frame = -1
     self._cs_frame = 0
@@ -209,7 +217,7 @@ class Car:
     # (selfdrived acts on it, carControl comes back one frame later)
     set_or_resume_pressed = any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
                                 for b in self.CS_prev.buttonEvents)
-    pending_gra_valid = self._pending_gra_cs is not None and (self._cs_frame - self._pending_gra_frame) <= 100
+    pending_gra_valid = self._pending_gra_cs is not None and (self._cs_frame - self._pending_gra_frame) <= PENDING_GRA_WINDOW_FRAMES
     if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed or pending_gra_valid):
       # Initialize cruise speed when longitudinal actually engages, not on the
       # overall enabled edge: in separate lat/long mode a lateral-only (ALA)

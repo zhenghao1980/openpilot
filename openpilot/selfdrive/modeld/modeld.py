@@ -397,8 +397,10 @@ def main(demo=False):
 
     mt1 = time.perf_counter()
     try:
-      send_chestnut = (chestnut_state is not None and
-                       run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutGpuState'].frequency) == 0)
+      # R-14.2: guard against frequency=0 (or so high the ratio rounds to 0)
+      chestnut_freq = SERVICE_LIST['chestnutGpuState'].frequency
+      send_chestnut = (chestnut_state is not None and chestnut_freq > 0 and
+                       run_count % max(round(ModelConstants.MODEL_RUN_FREQ / chestnut_freq), 1) == 0)
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
       if not params.get_bool("ChestnutActive"):
