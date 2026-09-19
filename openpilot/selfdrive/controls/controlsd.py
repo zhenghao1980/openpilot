@@ -156,9 +156,14 @@ class Controls:
       radar = RadarInput(soll=float(CS.stockAccSoll), neg_grad=float(CS.stockAccNegGrad), pos_grad=float(CS.stockAccPosGrad),
                          status=int(CS.stockAccStatus), relevant_obj=int(CS.stockAccRelevantObj),
                          abstandsindex=int(CS.stockAccAbstandsindex), healthy=bool(CS.stockAccHealthy))
-      self.decr_out = self.DecR.update(CC.longActive, CS.gasPressed, CS.stockAeb, CS.vEgo,
-                                       CS.vCruise * CV.KPH_TO_MS, self.curvature,
-                                       lead_prob, lead_x, lead_v, radar, a_target)
+      try:
+        self.decr_out = self.DecR.update(CC.longActive, CS.gasPressed, CS.stockAeb, CS.vEgo,
+                                         CS.vCruise * CV.KPH_TO_MS, self.curvature,
+                                         lead_prob, lead_x, lead_v, radar, a_target)
+      except Exception:
+        # DEC-R must never take down the main control loop: degrade to silent
+        cloudlog.exception("DecR.update failed; standing down this frame")
+        self.decr_out = DecrOutput()
       if self.decr_out.a_target is not None:
         a_target = min(a_target, self.decr_out.a_target)
     else:
