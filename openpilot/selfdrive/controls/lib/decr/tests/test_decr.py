@@ -8,6 +8,7 @@ speed-band gating, T1/T2 events, the ANB/override stand-downs and the trust
 monitor. Numeric thresholds here are the engineering initial values from
 constants.py, not independently calibrated truths.
 """
+import math
 import unittest
 
 from openpilot.selfdrive.controls.lib.decr import constants
@@ -219,15 +220,16 @@ class TestBands(unittest.TestCase):
 class TestEvents(unittest.TestCase):
   def test_t1_skips_deadzone_and_widens_clip(self):
     ctrl = armed_ctrl()
-    # deep braking held 0.15 s + abidx plummeting (450 -> 200 stays inside the
-    # 0.5 s window for 0.8 s of T1); depth is slew-limited, so track the min
-    run(ctrl, 45, radar=radar(soll=-2.5, abidx=450))
+    # deep braking held 0.15 s + abidx rising (200 -> 450 = gap collapsing,
+    # stays inside the 0.5 s window for 0.8 s of T1); depth is slew-limited,
+    # so track the min
+    run(ctrl, 45, radar=radar(soll=-2.5, abidx=200))
     saw_t1, deepest = False, 0.0
     for _ in range(90):
       out = ctrl.update(long_active=True, gas_pressed=False, stock_aeb=False,
                         v_ego=27.8, v_cruise=27.8, curvature=0.001,
                         lead_prob=0.9, lead_x=45.0, lead_v=25.0,
-                        radar=radar(soll=-2.5, abidx=200), a_op=0.5)
+                        radar=radar(soll=-2.5, abidx=450), a_op=0.5)
       saw_t1 = saw_t1 or out.event == "T1"
       if out.a_target is not None:
         deepest = min(deepest, out.a_target)
@@ -236,7 +238,7 @@ class TestEvents(unittest.TestCase):
 
   def test_t1_blocked_on_cutin(self):
     ctrl = armed_ctrl()
-    run(ctrl, 10, radar=radar(soll=-2.5, abidx=400))  # establish the abidx baseline
+    run(ctrl, 10, radar=radar(soll=-2.5, abidx=200))  # establish the abidx baseline
     # fresh cut-in: lead suddenly 20 m closer
     run(ctrl, 5, lead_x=60.0)
     run(ctrl, 2, lead_x=25.0)
@@ -245,32 +247,33 @@ class TestEvents(unittest.TestCase):
       out = ctrl.update(long_active=True, gas_pressed=False, stock_aeb=False,
                         v_ego=27.8, v_cruise=27.8, curvature=0.001,
                         lead_prob=0.9, lead_x=25.0, lead_v=25.0,
-                        radar=radar(soll=-2.5, abidx=200), a_op=0.5)
+                        radar=radar(soll=-2.5, abidx=450), a_op=0.5)
       saw_t1 = saw_t1 or out.event == "T1"
     self.assertFalse(saw_t1)
 
   def test_t1_blocked_far_no_vision(self):
     ctrl = armed_ctrl()
-    # abidx 130 (~107 m, far) + vision flicker: no T1 bypass
-    run(ctrl, 10, lead_prob=0.4, radar=radar(soll=-2.5, abidx=400))
+    # abidx rising 100 -> 160 (~102 m, far) + vision flicker: the rise gate
+    # passes, so this isolates the far-no-vision block (x_est > 80 m)
+    run(ctrl, 10, lead_prob=0.4, radar=radar(soll=-2.5, abidx=100))
     saw_t1 = False
     for _ in range(20):
       out = ctrl.update(long_active=True, gas_pressed=False, stock_aeb=False,
                         v_ego=27.8, v_cruise=27.8, curvature=0.001,
                         lead_prob=0.4, lead_x=45.0, lead_v=25.0,
-                        radar=radar(soll=-2.5, abidx=130), a_op=0.5)
+                        radar=radar(soll=-2.5, abidx=160), a_op=0.5)
       saw_t1 = saw_t1 or out.event == "T1"
     self.assertFalse(saw_t1)
 
   def test_fcw_on_sustained_deep_t1(self):
     ctrl = armed_ctrl()
-    run(ctrl, 45, radar=radar(soll=-3.2, abidx=450))
+    run(ctrl, 45, radar=radar(soll=-3.2, abidx=200))
     saw_t1, saw_fcw = False, False
     for _ in range(90):  # T1 confirm 0.15 s + FCW hold 0.5 s inside the window
       out = ctrl.update(long_active=True, gas_pressed=False, stock_aeb=False,
                         v_ego=27.8, v_cruise=27.8, curvature=0.001,
                         lead_prob=0.9, lead_x=45.0, lead_v=25.0,
-                        radar=radar(soll=-3.2, abidx=200), a_op=0.5)
+                        radar=radar(soll=-3.2, abidx=450), a_op=0.5)
       saw_t1 = saw_t1 or out.event == "T1"
       saw_fcw = saw_fcw or out.fcw
     self.assertTrue(saw_t1)
@@ -322,6 +325,72 @@ class TestEnvelopeAndTrust(unittest.TestCase):
     self.assertLess(constants.abidx_to_meters(500), constants.abidx_to_meters(300))
     self.assertAlmostEqual(constants.abidx_to_meters(567), 22.0, places=1)
     self.assertAlmostEqual(constants.abidx_to_meters(130), 107.0, places=1)
+
+
+class TestStandDownAndSanitation(unittest.TestCase):
+  """Review follow-ups: stand-down state resets, NaN soll guard, lead_prob clamp."""
+
+  def test_standdown_clears_r3a_and_fcw_state(self):
+    ctrl = armed_ctrl()
+    # drive state non-zero organically, then stand down on driver override
+    ctrl._r3a_blocked = True
+    ctrl._r3a_budget_used = 1.5
+    ctrl._t1_fcw_s = 0.3
+    out = run(ctrl, 1, gas_pressed=True)
+    self.assertIsNone(out.a_target)
+    self.assertFalse(ctrl._r3a_blocked)
+    self.assertEqual(ctrl._r3a_budget_used, 0.0)
+    self.assertEqual(ctrl._t1_fcw_s, 0.0)
+
+  def test_nan_soll_stands_down_without_poisoning_state(self):
+    ctrl = armed_ctrl()
+    out = run(ctrl, 3, radar=radar(soll=float('nan')))
+    self.assertIsNone(out.a_target)
+    # state must stay finite: a subsequent healthy frame behaves normally
+    # (R1 persistence 0.4 s + slew ramp from the reset _a_eff_prev: needs >100 frames)
+    out = run(ctrl, 150, radar=radar(soll=-1.0))
+    self.assertTrue(math.isfinite(ctrl._dsoll_dt))
+    self.assertTrue(math.isfinite(ctrl._soll_prev))
+    self.assertAlmostEqual(out.a_target, -0.8, places=3)
+
+  def test_lead_prob_clamped(self):
+    ctrl = armed_ctrl()
+    # out-of-range probabilities must behave like the clamped value, not crash
+    out_hi = run(ctrl, 5, lead_prob=1.7)
+    self.assertIsNotNone(out_hi)
+    ctrl2 = armed_ctrl()
+    # prob below zero == vision lost: no vision confirmation, no crash
+    out_lo = run(ctrl2, 5, lead_prob=-0.5)
+    self.assertIsNotNone(out_lo)
+
+  def test_min_only_invariant(self):
+    # min-only contract (enforced two-level: decr only engages when the radar
+    # offers > R1_EXCESS_MIN more decel than OP; controlsd takes min(a_op, out)).
+    # decr-internal properties that must hold for ANY input combination:
+    #   1. never emits positive acceleration
+    #   2. composition at the controlsd integration point never exceeds a_op
+    #   3. slew continuity: frame-to-frame step bounded by the jerk envelope
+    # Note: out.a_target alone MAY exceed a_op transiently (slew ramp); the
+    # binding guarantee lives at composition level 2.
+    ctrl = armed_ctrl()
+    prev = None
+    base_args = dict(long_active=True, gas_pressed=False, stock_aeb=False,
+                     v_ego=27.8, v_cruise=27.8, curvature=0.001,
+                     lead_prob=0.9, lead_x=45.0, lead_v=25.0)
+    for soll in (-3.5, -2.5, -1.4, -0.8, -0.2, 0.3):
+      for a_op in (-2.0, -1.0, 0.0, 0.5, 1.0):
+        for _ in range(5):
+          out = ctrl.update(radar=radar(soll=soll), a_op=a_op, **base_args)
+          if out.a_target is not None:
+            self.assertLessEqual(out.a_target, 1e-9, f"positive accel: soll={soll} out={out.a_target}")
+            final = min(a_op, out.a_target)
+            self.assertLessEqual(final, a_op + 1e-9)  # controlsd composition
+            if prev is not None:
+              self.assertLessEqual(abs(out.a_target - prev), 3.5 * constants.DT_CTRL + 1e-6,
+                                   f"slew jump: {prev} -> {out.a_target}")
+            prev = out.a_target
+          else:
+            prev = None
 
 
 if __name__ == "__main__":

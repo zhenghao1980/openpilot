@@ -35,7 +35,7 @@ from openpilot.selfdrive.controls.lib.decr.constants import (
   FAR_X_M, FF_HORIZON_S, GRAD_FALLBACK_NEG, GRAD_FALLBACK_POS,
   LOCK_DISARM_S, OVERCRUISE_BORROW, OVERCRUISE_MARGIN_KPH, R1_DEADZONE,
   R1_EXCESS_MIN, R1_PERSIST_S, R2_PERSIST_SCALE, R3A_BUDGET_S, R3A_CLIP,
-  R3A_FCW_SOLL_TH, R3A_HAND_BACK_V, R3A_MIN_LOCK_AGE_S, T1_ABIDX_DROP,
+  R3A_FCW_SOLL_TH, R3A_HAND_BACK_V, R3A_MIN_LOCK_AGE_S, T1_ABIDX_RISE,
   T1_ABIDX_WINDOW_S, T1_CLIP, T1_CONFIRM_S, T1_FCW_HOLD_S, T1_FCW_SOLL_TH,
   T1_SOLL_TH, T2_DIST_M, T2_FAR_CAP, T2_V_CLOSE_TH, TRUST_MAX_NOTCH,
   TRUST_SOLL_TH, TRUST_VISION_EMPTY_PROB, TRUST_WINDOW_S, V2_MIN_KPH,
@@ -186,14 +186,18 @@ class DecrController:
       if lead_prob >= VISION_STEADY_PROB and x_then - lead_x > CUTIN_X_DROP_M:
         self._cutin_s = CUTIN_SUPPRESS_S
 
-  def _abidx_dropped(self, abidx: int) -> bool:
+  def _abidx_rising(self, abidx: int) -> bool:
+    # T1 confirmation edge. The J428 display index is BIG = NEAR (22 m ~ 567,
+    # 107 m ~ 130, verified on 82k paired ACC_02/vision frames): a real braking
+    # event makes the index RISE as the gap collapses. The old falling-edge
+    # gate armed on the radar RELEASING the target - the exact wrong direction.
     self._abidx_hist.append((self._t, abidx))
     while self._abidx_hist and self._abidx_hist[0][0] < self._t - T1_ABIDX_WINDOW_S:
       self._abidx_hist.popleft()
     if not self._abidx_hist:
       return False
-    peak = max(a for _, a in self._abidx_hist)
-    return abidx < ABIDX_NO_TARGET and peak < ABIDX_NO_TARGET and (peak - abidx) >= T1_ABIDX_DROP
+    trough = min(a for _, a in self._abidx_hist)
+    return abidx < ABIDX_NO_TARGET and trough < ABIDX_NO_TARGET and (abidx - trough) >= T1_ABIDX_RISE
 
   def _slew_limit(self, cand: float, radar: RadarInput) -> float:
     # Borrow J428's own jerk envelope (chapter 15 §3.1): toward more braking
@@ -229,10 +233,15 @@ class DecrController:
                      healthy=radar.healthy, trust_notch=self._trust_notch,
                      abstandsindex=radar.abstandsindex, soll=radar.soll, band=self._band)
 
+    # Input sanitation: clamp vision probability into [0, 1]; a NaN/inf soll
+    # would poison _dsoll_dt and the slew state, so it stands DEC-R down the
+    # same way a sick radar does (silent, nothing emitted).
+    lead_prob = min(max(lead_prob, 0.0), 1.0)
+
     # Hard gates: feature/platform switch, radar health (silent degradation),
     # longitudinal active, driver override, and the ANB yield protocol - any
     # failure and DEC-R emits nothing this frame.
-    if not (self.enabled and self.is_mlb and radar.healthy and long_active) or gas_pressed or stock_aeb:
+    if not (self.enabled and self.is_mlb and radar.healthy and long_active and math.isfinite(radar.soll)) or gas_pressed or stock_aeb:
       if not radar.healthy:
         # can't trust the lock flag from a sick radar: re-arm from scratch
         self._armed = False
@@ -242,6 +251,9 @@ class DecrController:
       self._exit_hold_t = 0.0
       self._t1_confirm_s = 0.0
       self._t1_latched = False
+      self._t1_fcw_s = 0.0
+      self._r3a_blocked = False
+      self._r3a_budget_used = 0.0
       self._a_eff_prev = 0.0
       return out
 
@@ -266,7 +278,7 @@ class DecrController:
     self._soll_prev = radar.soll
     self._update_cutin(lead_prob, lead_x)
     self._cutin_s = max(0.0, self._cutin_s - dt)
-    abidx_drop = self._abidx_dropped(radar.abstandsindex)
+    abidx_rise = self._abidx_rising(radar.abstandsindex)
     x_est = abidx_to_meters(radar.abstandsindex) if radar.abstandsindex < ABIDX_NO_TARGET else float('inf')
 
     # vision kinematics only when the model sees something at all
@@ -286,12 +298,12 @@ class DecrController:
     else:
       self._t1_confirm_s = 0.0
     if not self._t1_latched:
-      # one-shot confirmation: deep request held + abidx plummeting, suppressed
-      # around cut-ins and unconfirmable far/curved targets
-      self._t1_latched = (self._t1_confirm_s >= T1_CONFIRM_S and abidx_drop and
+      # one-shot confirmation: deep request held + abidx rising (gap collapsing),
+      # suppressed around cut-ins and unconfirmable far/curved targets
+      self._t1_latched = (self._t1_confirm_s >= T1_CONFIRM_S and abidx_rise and
                           self._cutin_s <= 0.0 and event_corroborated)
     elif radar.soll > T1_SOLL_TH or not self._armed:
-      # latch releases when the radar itself releases; the abidx drop is only
+      # latch releases when the radar itself releases; the abidx rise is only
       # a confirmation gate, it ages out of its window while the braking event
       # is still ongoing
       self._t1_latched = False
