@@ -154,6 +154,8 @@ class TestControllerStateMachine(unittest.TestCase):
     c._a_lat_reg_max = 2.0
     c._v_arb, c._has_target = 0., False
     c._a_target = 0.
+    c._leaving_finish_cnt = 0
+    c.vision_a = SimpleNamespace(v_at_p97=20.0)
     c.vision_b = SimpleNamespace(overshoot=False, overshoot_distance=0., overshoot_speed=0.)
     return c
 
@@ -193,6 +195,10 @@ class TestControllerStateMachine(unittest.TestCase):
     self.assertEqual(c.state, "leaving")
     c._current_lat_acc = 0.5
     c._update_state(True, False)
+    # M-02: finish must persist for LEAVING_FINISH_FRAMES, not a single frame
+    self.assertEqual(c.state, "leaving")
+    for _ in range(constants.LEAVING_FINISH_FRAMES - 1):
+      c._update_state(True, False)
     self.assertEqual(c.state, "enabled")
 
   def test_abort_on_prediction_drop(self):
@@ -350,6 +356,147 @@ class TestControllerRegression(TestControllerStateMachine):
     self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[2])
     c._update_estimates(self._sm()['modelV2'], personality=FakeDynamicEnum(99))
     self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[-1])
+
+
+class TestReviewV32Regressions(unittest.TestCase):
+  """Regression tests for the v3.2 review round (N-01/N-03/N-04/M-02/M-04/M-07/M-08/R-09)."""
+
+  def test_vision_a_nan_frame_survives(self):
+    # N-01: one corrupt frame must neither crash nor latch confidence into a
+    # NaN absorbing state (fail-silent loss of the estimator)
+    est = vision_a.VisionAEstimator()
+    est.update(fake_model([0.1] * 10, [20.0] * 10), 20.0)
+    est.update(fake_model([np.nan] * 10, [20.0] * 10), 20.0)
+    self.assertTrue(np.isfinite(est.max_pred_lat_acc))
+    self.assertTrue(np.isfinite(est.confidence))
+    est.update(fake_model([np.inf] * 10, [20.0] * 10), 20.0)
+    self.assertTrue(np.isfinite(est.max_pred_lat_acc))
+    self.assertTrue(np.isfinite(est.confidence))
+    # and the estimator still works after the poisoned frames
+    pred = est.update(fake_model([0.1] * 10, [20.0] * 10), 20.0)
+    self.assertAlmostEqual(pred, 2.0, places=5)
+
+  def test_vision_a_speed_uses_plan_speed_at_percentile(self):
+    # N-04: allowed speed must reference the plan speed, not v_ego.
+    # v_plan=30, v_ego=20, constant yaw=0.1 -> a_pred = 3.0,
+    # v_allow = 30 * sqrt(2/3) = 24.49 (old v_ego formula returned 16.33)
+    from openpilot.selfdrive.controls.lib.scc.controller import SccXController
+    est = vision_a.VisionAEstimator()
+    pred = est.update(fake_model([0.1] * 10, [30.0] * 10), 20.0)
+    self.assertAlmostEqual(pred, 3.0, places=5)
+    self.assertAlmostEqual(est.v_at_p97, 30.0, places=5)
+    c = object.__new__(SccXController)
+    c._a_lat_reg_max = 2.0
+    c._v_ego = 20.0
+    c._v_cruise = 33.0
+    c._max_pred_lat_acc = pred
+    c.vision_a = est
+    self.assertAlmostEqual(c._vision_a_speed(), 30.0 * math.sqrt(2.0 / 3.0), places=4)
+
+  def test_polyfit_degenerate_lane_x_does_not_crash(self):
+    # N-03/R-02: all-equal lane x must not raise LinAlgError out of polyfit
+    est = vision_b.VisionBEstimator()
+    ll = lambda xs, ys: SimpleNamespace(t=[0.0] * len(xs), x=list(xs), y=list(ys))
+    lines = [ll([], []), ll(np.zeros(33), np.full(33, -1.875)),
+             ll(np.zeros(33), np.full(33, 1.875)), ll([], [])]
+    model = fake_model([], [], lines, lane_probs=[0., 0.95, 0.95, 0.], lane_stds=[0., 0.1, 0.1, 0.])
+    est.update(model, 20.0, 2.0)  # must not raise
+    self.assertEqual(est.max_pred_curvature, 0.)
+    self.assertEqual(est.confidence, 0.)
+
+  def test_arbiter_first_frame_requires_confidence_above_gate(self):
+    # M-08: vision_a's initial confidence is exactly CONF_VISION_A_GATE; a
+    # single frame at exactly the gate must not lock in a target
+    a = arbiter.SccArbiter()
+    v, has = a.update(0., 0., 0.5, 9.0, constants.CONF_VISION_A_GATE, 0., 0.)
+    self.assertFalse(has)
+    v, has = a.update(0., 0., 0.5, 9.0, constants.CONF_VISION_A_GATE + 0.1, 0., 0.)
+    self.assertTrue(has)
+    self.assertAlmostEqual(v, 9.0, delta=0.01)
+
+  def test_arbiter_dropout_keeps_anchor_briefly(self):
+    # M-04: a one-frame source dropout must not clear the adopted anchor
+    a = arbiter.SccArbiter()
+    v, has = a.update(0., 0., 0.5, 0., 0., 12.0, 0.9)
+    self.assertTrue(has)
+    v, has = a.update(0., 0., 0.5, 0., 0., 0., 0.)
+    self.assertTrue(has)                # anchor kept through the dropout
+    self.assertAlmostEqual(v, 12.0, delta=0.01)
+    self.assertEqual(a.source, "none")  # R-03: reported source clears immediately
+    for _ in range(constants.NONE_RESET_FRAMES - 1):
+      v, has = a.update(0., 0., 0.5, 0., 0., 0., 0.)
+    self.assertFalse(has)               # after NONE_RESET_FRAMES the anchor is gone
+
+  def _make_leaving(self, current_lat_acc, pred_lat_acc):
+    from openpilot.selfdrive.controls.lib.scc.controller import SccXController
+    c = object.__new__(SccXController)
+    c.enabled = True
+    c.state = "leaving"
+    c._leaving_finish_cnt = 0
+    c._current_lat_acc = current_lat_acc
+    c._max_pred_lat_acc = pred_lat_acc
+    return c
+
+  def test_leaving_stuck_window_escapes_on_clean_prediction(self):
+    # M-02/M-09: lat-acc parked in [FINISH, TURNING) must not latch leaving
+    c = self._make_leaving(1.2, 0.5)  # old stuck window, clean road ahead
+    for _ in range(constants.LEAVING_FINISH_FRAMES - 1):
+      c._update_state(True, False)
+      self.assertEqual(c.state, "leaving")
+    c._update_state(True, False)
+    self.assertEqual(c.state, "enabled")
+
+  def test_leaving_finish_blocked_by_new_curve_prediction(self):
+    # M-02: lat-acc decayed but another curve predicted -> must NOT finish
+    c = self._make_leaving(0.5, 2.0)
+    for _ in range(constants.LEAVING_FINISH_FRAMES * 2):
+      c._update_state(True, False)
+    self.assertEqual(c.state, "leaving")
+
+  def test_personality_none_does_not_crash(self):
+    # R-09: None personality must fall back to standard instead of TypeError
+    from openpilot.selfdrive.controls.lib.scc.controller import SccXController
+    c = object.__new__(SccXController)
+    c.vision_a = SimpleNamespace(update=lambda m, v: 0., confidence=0.9, v_at_p97=20.)
+    c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0., confidence=0.)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.arbiter = arbiter.SccArbiter()
+    c._v_ego = 20.0
+    c._a_ego = 0.
+    c._v_cruise = 33.0
+    c._update_estimates(fake_model([0.0] * 10, [20.0] * 10), personality=None)
+    self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[1])
+
+  def test_disabled_transition_resets_arbiter(self):
+    # M-07: dropping long_enabled must reset the arbiter immediately, so a
+    # stale adopted speed can't anchor the next engagement
+    from openpilot.selfdrive.controls.lib.scc.controller import SccXController
+    c = object.__new__(SccXController)
+    c.enabled = True
+    c.frame = 1
+    c.state = "entering"
+    c._v_ego = 20.0
+    c._a_ego = 0.
+    c._v_cruise = 33.0
+    c._current_lat_acc = 0.
+    c._max_pred_lat_acc = 3.0
+    c._a_lat_reg_max = 2.0
+    c._v_arb, c._has_target = 10., True
+    c._a_target = -1.0
+    c._leaving_finish_cnt = 0
+    c.vision_a = SimpleNamespace(update=lambda m, v: 3.0, confidence=0.9, v_at_p97=20.)
+    c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0.,
+                                 confidence=0., overshoot=False, overshoot_distance=0., overshoot_speed=0.)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.arbiter = arbiter.SccArbiter()
+    c.params = SimpleNamespace(get_bool=lambda k: True)
+    sm = {'modelV2': fake_model([0.0] * 10, [20.0] * 10), 'controlsState': SimpleNamespace(curvature=0.0)}
+    out = c.update(sm, 20.0, 0., 33.0, True, False, 1)
+    self.assertEqual(out.state, "entering")
+    out = c.update(sm, 20.0, 0., 33.0, False, False, 1)  # longitudinal drops
+    self.assertEqual(out.state, "disabled")
+    self.assertFalse(c.arbiter._have_target)
+    self.assertEqual(c.arbiter._v_adopted, 0.)
 
 
 if __name__ == "__main__":

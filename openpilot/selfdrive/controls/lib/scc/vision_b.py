@@ -76,9 +76,20 @@ class VisionBEstimator:
 
     # -- fit center path cubic --------------------------------------------------
     center_y = width_pts / 2. + lll_y
-    if len(ll_x) < 4:
+    # N-03/R-02: a degenerate lane-line x vector (corrupted frame: all-equal or
+    # too few distinct points) makes np.polyfit raise LinAlgError (killing
+    # plannerd) or return garbage coefficients. Refuse the fit instead.
+    if len(ll_x) < 4 or np.unique(ll_x).size < 4:
+      self.confidence = 0.
       return
-    self.path_poly = np.polyfit(ll_x, center_y, 3)
+    try:
+      self.path_poly = np.polyfit(ll_x, center_y, 3)
+    except np.linalg.LinAlgError:
+      self.confidence = 0.
+      return
+    if not np.all(np.isfinite(self.path_poly)):
+      self.confidence = 0.
+      return
 
     pred_curvatures = _curvature_of_cubic(self.path_poly, EVAL_RANGE)
     self.max_pred_curvature = float(np.amax(pred_curvatures))
