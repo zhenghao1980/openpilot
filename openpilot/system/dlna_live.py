@@ -418,8 +418,12 @@ _PARAM_DIR = "/data/params/d"
 
 
 def _write_param(name: str, value: str) -> None:
-  with open(f"{_PARAM_DIR}/{name}", "w") as f:
+  # R-13.1: atomic param write (temp file + rename) — a concurrent reader never
+  # sees a truncated file, and racing writers can't interleave
+  tmp = f"{_PARAM_DIR}/.{name}.tmp.{os.getpid()}"
+  with open(tmp, "w") as f:
     f.write(value)
+  os.replace(tmp, f"{_PARAM_DIR}/{name}")
 
 
 def cleanup_live_stream() -> None:

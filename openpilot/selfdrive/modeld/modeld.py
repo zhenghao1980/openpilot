@@ -80,18 +80,30 @@ class ChestnutState:
     self.sends = 0
     self.metrics = {}
     self._asm_usb = None
+    self._asm_usb_ctx = None
 
   def _close_asm_usb(self) -> None:
     if self._asm_usb is not None:
       self._asm_usb.close()
       self._asm_usb = None
+    if self._asm_usb_ctx is not None:
+      self._asm_usb_ctx.close()
+      self._asm_usb_ctx = None
 
   def _open_asm_usb(self):
     context = usb1.USBContext()
-    for vendor_id, product_id in CHESTNUT_USB_IDS:
-      if (handle := context.openByVendorIDAndProductID(vendor_id, product_id, skip_on_error=True)) is not None:
-        return handle
-    context.close()
+    try:
+      for vendor_id, product_id in CHESTNUT_USB_IDS:
+        if (handle := context.openByVendorIDAndProductID(vendor_id, product_id, skip_on_error=True)) is not None:
+          # R-14.1: keep the context alive for the handle's lifetime — if the
+          # context is GC'd (libusb_exit) while the handle is open, subsequent
+          # controlRead calls break. Closed together in _close_asm_usb.
+          self._asm_usb_ctx = context
+          return handle
+      context.close()
+    except Exception:
+      context.close()  # R-14.1: no context leak on the error path
+      raise
 
   def _read_ina(self) -> tuple[int, int, bool]:
     if "AMD" in Device._opened_devices and self._asm_usb is None:
@@ -409,8 +421,10 @@ def main(demo=False):
 
     mt1 = time.perf_counter()
     try:
-      send_chestnut = (chestnut_state is not None and
-                       run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0)
+      # R-14.2: guard against frequency=0 (or so high the ratio rounds to 0)
+      chestnut_freq = SERVICE_LIST['chestnutState'].frequency
+      send_chestnut = (chestnut_state is not None and chestnut_freq > 0 and
+                       run_count % max(round(ModelConstants.MODEL_RUN_FREQ / chestnut_freq), 1) == 0)
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
       if not params.get_bool("ChestnutActive"):
