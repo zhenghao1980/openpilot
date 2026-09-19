@@ -1,3 +1,4 @@
+# Derived from sunnypilot SCC-V (https://github.com/sunnyhaibin/sunnypilot) - MIT License
 """Vision-A curvature estimator (sunnypilot SCC-V method).
 
 Predicts curve-induced lateral acceleration directly from the driving model's
@@ -29,10 +30,16 @@ class VisionAEstimator:
     rate_plan = np.array(np.abs(model_v2.orientationRate.z))
     vel_plan = np.maximum(np.array(model_v2.velocity.x), 0.)
 
-    # N-01: one corrupt model frame (NaN/Inf) must not poison the estimate.
-    # Without this, np.percentile returns NaN and confidence enters a NaN
-    # absorbing state (fail-silent loss of this estimator for the whole drive).
-    predicted = np.nan_to_num(rate_plan * vel_plan, nan=0.0, posinf=0.0, neginf=0.0)
+    # N-01/R-22: one corrupt model frame (NaN/Inf) must not poison the estimate.
+    # Fail-LOUD, not fail-silent: zeroing NaN via nan_to_num would let the zeros
+    # bias the percentile low and trigger phantom deceleration. Instead, reject
+    # the frame outright (confidence = 0 -> the arbiter refuses this source) and
+    # keep the last good estimate. Confidence recovers through the IIR below on
+    # subsequent clean frames.
+    predicted = rate_plan * vel_plan
+    if not np.all(np.isfinite(predicted)):
+      self.confidence = 0.0
+      return self.max_pred_lat_acc
     if len(predicted):
       p = float(np.percentile(predicted, PRED_LAT_ACC_PERCENTILE))
       self.max_pred_lat_acc = p

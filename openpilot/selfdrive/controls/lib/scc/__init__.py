@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Portions derived from sunnypilot (https://github.com/sunnyhaibin/sunnypilot) - MIT License
+# Portions derived from dragonpilot (https://github.com/dragonpilot-community/dragonpilot) - MIT License
 """SCC-X: fused curve-speed control (Smart Cruise Control - eXperimental).
 
 Combines the strengths of sunnypilot's SCC-V (direct model lateral-acceleration

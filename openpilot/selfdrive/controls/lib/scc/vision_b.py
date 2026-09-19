@@ -1,3 +1,4 @@
+# Derived from dragonpilot VisionTurnController (https://github.com/dragonpilot-community/dragonpilot) - MIT License
 """Vision-B curvature estimator (dragonpilot VisionTurnController method).
 
 Fits a cubic polynomial to the lane-line center path and evaluates geometric

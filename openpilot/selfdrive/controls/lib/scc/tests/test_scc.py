@@ -362,19 +362,24 @@ class TestReviewV32Regressions(unittest.TestCase):
   """Regression tests for the v3.2 review round (N-01/N-03/N-04/M-02/M-04/M-07/M-08/R-09)."""
 
   def test_vision_a_nan_frame_survives(self):
-    # N-01: one corrupt frame must neither crash nor latch confidence into a
-    # NaN absorbing state (fail-silent loss of the estimator)
+    # N-01/R-22: one corrupt frame must neither crash nor poison the estimate,
+    # and must be rejected FAIL-LOUD: confidence drops to 0 so the arbiter
+    # refuses this source for that frame (zeroing NaN via nan_to_num would
+    # bias the percentile low and trigger phantom deceleration).
     est = vision_a.VisionAEstimator()
     est.update(fake_model([0.1] * 10, [20.0] * 10), 20.0)
+    good_pred = est.max_pred_lat_acc
     est.update(fake_model([np.nan] * 10, [20.0] * 10), 20.0)
     self.assertTrue(np.isfinite(est.max_pred_lat_acc))
-    self.assertTrue(np.isfinite(est.confidence))
+    self.assertEqual(est.confidence, 0.0)  # fail-loud reject
+    self.assertEqual(est.max_pred_lat_acc, good_pred)  # last good estimate kept, not zero-biased
     est.update(fake_model([np.inf] * 10, [20.0] * 10), 20.0)
     self.assertTrue(np.isfinite(est.max_pred_lat_acc))
-    self.assertTrue(np.isfinite(est.confidence))
-    # and the estimator still works after the poisoned frames
+    self.assertEqual(est.confidence, 0.0)
+    # and the estimator recovers through the IIR after the poisoned frames
     pred = est.update(fake_model([0.1] * 10, [20.0] * 10), 20.0)
     self.assertAlmostEqual(pred, 2.0, places=5)
+    self.assertGreater(est.confidence, 0.0)
 
   def test_vision_a_speed_uses_plan_speed_at_percentile(self):
     # N-04: allowed speed must reference the plan speed, not v_ego.

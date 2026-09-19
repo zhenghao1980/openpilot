@@ -1,3 +1,4 @@
+# Derived from sunnypilot SCC-V / dragonpilot VisionTurnController - MIT License
 """SCC-X unified state machine and controller.
 
 State machine skeleton follows sunnypilot's SmartCruiseControlVision
@@ -222,8 +223,10 @@ class SccXController:
     prev_state = self.state
     self._update_state(long_enabled, long_override)
     if self.state == "disabled" and prev_state != "disabled":
-      # M-07: dropping out (long disable / feature off) must re-arm the arbiter
-      # so a stale adopted speed can't anchor the next engagement
+      # M-07: fire on the frame the state machine LANDS on disabled from any
+      # other state (the transition edge), regardless of what prev_state was.
+      # Dropping out must re-arm the arbiter so a stale adopted speed can't
+      # anchor the next engagement
       self.arbiter.reset()
       self._leaving_finish_cnt = 0
     self._update_solution()
