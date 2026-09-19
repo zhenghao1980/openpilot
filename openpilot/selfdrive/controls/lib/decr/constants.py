@@ -71,11 +71,13 @@ R3A_FCW_SOLL_TH = -1.0     # [m/s^2]
 # Entry guard: only from R1/R2, or with lock age >= R3A_MIN_LOCK_AGE_S.
 
 # --- T1: confirmed emergency braking (valid in ALL bands) ---------------------
-# J428 <= -2.0 held 0.15s + locked + Abstandsindex plummeting
+# J428 <= -2.0 held 0.15s + locked + Abstandsindex RISING (big = NEAR:
+# 22 m ~ 567, 107 m ~ 130; a real event is the gap collapsing => index jumps up)
 T1_SOLL_TH = -2.0          # [m/s^2]
 T1_CONFIRM_S = 0.15
 T1_CLIP = -3.5             # clip widened (matches opendbc ACCEL_MIN)
-T1_ABIDX_DROP = 150        # index units within the window (initial value)
+T1_ABIDX_RISE = 50         # index units above the 0.5s window trough (~5-8 m of
+                           # gap collapse at 60 kph; quantization/noise << 10)
 T1_ABIDX_WINDOW_S = 0.5
 # Sustained <= -3.0 -> FCW audible prompt
 T1_FCW_SOLL_TH = -3.0
@@ -116,10 +118,11 @@ TRUST_MAX_NOTCH = 2        # B1 -> B2 -> B3 floor
 GRAD_FALLBACK_NEG = 3.5    # m/s^3, brake direction is never self-limited
 GRAD_FALLBACK_POS = 0.6    # m/s^3, release direction stays soft
 
-# B8 cluster ACC_Abstandsindex -> meters, inverse of the calibrated display LUT
-# in opendbc/car/volkswagen/mlbcan.py (_ABSTANDSINDEX_LUT). Mirrored here to
-# keep this package free of car-stack imports (same pattern as scc). Monotonic
-# decreasing index vs distance; clamped at both ends like the source LUT.
+# B8 cluster ACC_Abstandsindex -> meters, inverse of the legacy 1D display LUT
+# (calibration speed band ~50 kph slice). mlbcan.py now carries the 2D
+# (v_ego, distance) table _ABIDX2D; this mirror stays 1D because call sites
+# have no v_ego plumbed and DEC-R far_no_vision semantics are tuned against it
+# (107 > 80 m threshold). Revisit with a 2D inverse if DEC-R ever takes v_ego.
 #   distance m:  22   27   32   37   42   47   52   57   62   67   72   77   82   87   92   97  102  107  115
 #   abidx:      567  532  507  488  459  422  414  381  355  326  301  284  275  244  234  200  161  130  130
 # 超过 107m 一律按 ≥107m 处理,far_no_vision 判据不受影响(107 > 80m 门限)。
