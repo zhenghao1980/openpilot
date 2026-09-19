@@ -888,6 +888,12 @@ struct ControlsState @0x97ff69c53601abf1 {
   desiredCurvature @61 :Float32;  # lag adjusted curvatures used by lateral controllers
   forceDecel @51 :Bool;
 
+  # DEC-R stock radar deceleration fusion state (VW MLB only;
+  # openpilot/selfdrive/controls/lib/decr, spec: op-model-outputs.html ch. 15).
+  # Every controlsState frame lands in the rlog, so R3a/T1/T2 interventions
+  # are captured full-rate for offline review (chapter 15 §8.6).
+  decR @67 :DecRState;
+
   lateralControlState :union {
     pidState @53 :LateralPIDState;
     angleState @58 :LateralAngleState;
@@ -1008,6 +1014,22 @@ struct ControlsState @0x97ff69c53601abf1 {
     aTarget @35 :Float32;
     vTargetLead @3 :Float32;
   }
+}
+
+struct DecRState {
+  active @0 :Bool;          # a radar candidate is fused into aTarget this frame
+  grid @1 :Text;            # none | R1 | R2 | R3a | R3b | R3x
+  event @2 :Text;           # none | T1 | T2
+  band @3 :Text;            # B1 | B2 | B3 (hysteresis-applied)
+  aRadarSoll @4 :Float32;   # raw J428 ACC_Sollbeschleunigung [m/s^2]
+  aRadarEff @5 :Float32;    # fused candidate actually applied [m/s^2]
+  locked @6 :Bool;          # lock ticket conditions met this frame
+  armed @7 :Bool;           # lock held past the band arm time
+  abstandsindex @8 :UInt16; # raw ACC_02 index (drop sequence for T1 review)
+  radarHealthy @9 :Bool;
+  trustNotch @10 :UInt8;    # trust-monitor downgrades applied this trip
+  fcw @11 :Bool;            # DEC-R requested an FCW prompt this frame
+  trustEvent @12 :Bool;     # rising edge: trust notch jumped this frame (SOTIF review)
 }
 
 struct DrivingModelData {

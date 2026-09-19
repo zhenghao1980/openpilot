@@ -89,6 +89,11 @@ class DeveloperLayoutMici(NavScroller):
     self._scc_x_toggle = BigParamControl("scc-x curve speed", "SccXEnabled",
                                          description="Fused curve-speed control (dual vision estimators with confidence gating). "
                                                      "Map-based prediction (SCC-M) is reserved but not implemented yet.")
+    self._decr_toggle = BigParamControl("dec-r radar fusion", "DecrEnabled",
+                                        description="Stock J428 radar deceleration fused into longitudinal as a min()-only "
+                                                    "candidate (brake earlier, never faster). Comfort feature, no stationary "
+                                                    "obstacles. VW MLB (B8PA) only. Only effective with openpilot "
+                                                    "longitudinal control (OP long).")
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -100,6 +105,7 @@ class DeveloperLayoutMici(NavScroller):
       self._alpha_long_toggle,
       self._debug_mode_toggle,
       self._scc_x_toggle,
+      self._decr_toggle,
     ])
 
     # Toggle lists
@@ -112,9 +118,10 @@ class DeveloperLayoutMici(NavScroller):
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._debug_mode_toggle),
       ("SccXEnabled", self._scc_x_toggle),
+      ("DecrEnabled", self._decr_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)
-    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
+    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._decr_toggle)
     engaged_blocked_toggles = (self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
 
     # Hide non-release toggles on release builds

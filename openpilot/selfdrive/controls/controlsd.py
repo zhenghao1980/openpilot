@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
+from openpilot.selfdrive.controls.lib.decr import DecrController, DecrOutput, RadarInput
 from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -51,8 +52,15 @@ class Controls:
 
     # B8PA/MLB: ungated lane-departure tracker for the cluster FIS red-line display
     # (plannerd's driverAssistance LDW is gated off while latActive, but stock ALA
-    # shows the red line exactly while steering). Only consumed on MLB below.
+    # shows the red line exactly while steering). Only consumed on MLB platforms
+    # (CP.flags & VolkswagenFlags.MLB); other brands never read ldw_mlb.
     self.ldw_mlb = LaneDepartureWarning()
+
+    # DEC-R (B8PA/MLB): fuse the stock J428 radar's own deceleration request
+    # into longitudinal as a min()-only candidate (spec: op-model-outputs.html
+    # ch. 15). Harmless on other platforms: is_mlb=False keeps it silent.
+    self.DecR = DecrController(is_mlb=bool(self.CP.flags & VolkswagenFlags.MLB), params=self.params)
+    self.decr_out = DecrOutput()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -131,7 +139,32 @@ class Controls:
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
-    actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
+
+    # DEC-R: fuse the stock J428 radar's deceleration request as a final
+    # min()-candidate on the planner's aTarget - it can only make control more
+    # conservative, never faster (chapter 15 iron rule 1). ANB (stockAeb) and
+    # driver override make it stand down the same frame.
+    # DEC-R 守门条件:MLB 平台 + openpilotLongitudinalControl。
+    # stock long 下 J428 直连动力总成、OP 不写 ACC_01,min() 无融合对象,
+    # 静默是正确行为(非失效);开关描述已在设置面板注明此限定。
+    a_target = long_plan.aTarget
+    if self.CP.flags & VolkswagenFlags.MLB and self.CP.openpilotLongitudinalControl:
+      lead_prob = lead_x = lead_v = 0.0
+      if self.sm.valid['modelV2'] and model_v2.leadsV3:
+        lead0 = model_v2.leadsV3[0]
+        lead_prob, lead_x, lead_v = float(lead0.prob), float(lead0.x[0]), float(lead0.v[0])
+      radar = RadarInput(soll=float(CS.stockAccSoll), neg_grad=float(CS.stockAccNegGrad), pos_grad=float(CS.stockAccPosGrad),
+                         status=int(CS.stockAccStatus), relevant_obj=int(CS.stockAccRelevantObj),
+                         abstandsindex=int(CS.stockAccAbstandsindex), healthy=bool(CS.stockAccHealthy))
+      self.decr_out = self.DecR.update(CC.longActive, CS.gasPressed, CS.stockAeb, CS.vEgo,
+                                       CS.vCruise * CV.KPH_TO_MS, self.curvature,
+                                       lead_prob, lead_x, lead_v, radar, a_target)
+      if self.decr_out.a_target is not None:
+        a_target = min(a_target, self.decr_out.a_target)
+    else:
+      self.decr_out = DecrOutput()
+
+    actuators.accel = float(self.LoC.update(CC.longActive, CS, a_target, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -188,6 +221,13 @@ class Controls:
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
+    # DEC-R FCW prompt (B3 blocked-R3a / sustained T1 deep braking): reuse the
+    # cluster's stock FCW path - visualAlert=fcw plus audibleAlert 5 maps to
+    # ACC_Akustik=1 in carcontroller, giving the stock warning chime.
+    if self.decr_out.fcw:
+      hudControl.visualAlert = car.CarControl.HUDControl.VisualAlert.fcw
+      hudControl.audibleAlert = car.CarControl.HUDControl.AudibleAlert.warningImmediate
+
     hudControl.rightLaneVisible = True
     hudControl.leftLaneVisible = True
     if self.sm.valid['driverAssistance']:
@@ -227,6 +267,30 @@ class Controls:
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or
                          (self.sm['selfdriveState'].state == State.softDisabling))
+
+    # DEC-R fusion state: full-rate logging so every R3a/T1/T2 intervention
+    # (with the Abstandsindex sequence) lands in the rlog for offline review
+    # and ghost-braking rate accounting (chapter 15 §8.6). A trust-monitor
+    # downgrade edge is additionally cloudlogged.
+    dr = self.decr_out
+    cs.decR.active = dr.a_target is not None
+    cs.decR.grid = dr.grid
+    cs.decR.event = dr.event
+    cs.decR.band = dr.band
+    cs.decR.aRadarSoll = float(dr.soll)
+    cs.decR.aRadarEff = float(dr.a_target) if dr.a_target is not None else 0.0
+    cs.decR.locked = dr.locked
+    cs.decR.armed = dr.armed
+    cs.decR.abstandsindex = int(dr.abstandsindex)
+    cs.decR.radarHealthy = dr.healthy
+    # trustEvent 是降档上升沿标志:仅在 notch 跳变那一帧为 True,用于 rlog 复盘
+    # SOTIF 信任降级事件;notch 档位本身每帧经 cs.decR.trustNotch 落盘。
+    # notch 按设计稿语义仅存于本行程(进程内存),不做跨重启持久化。
+    cs.decR.trustNotch = dr.trust_notch
+    cs.decR.fcw = dr.fcw
+    cs.decR.trustEvent = dr.trust_event
+    if dr.trust_event:
+      cloudlog.warning(f"DEC-R trust downgrade: radar/vision contradiction >2s, notch={dr.trust_notch}")
 
     # trigger the car's stock driver monitoring escalation
     CC.driverMonitoringEscalation = cs.forceDecel
