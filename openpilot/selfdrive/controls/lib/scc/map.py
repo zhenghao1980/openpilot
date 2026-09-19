@@ -1,3 +1,4 @@
+# SCC-M framework placeholder (no upstream derivation)
 """SCC-M entry point / framework (NOT implemented).
 
 This stub defines the contract a future map-based curve estimator must fulfil

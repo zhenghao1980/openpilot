@@ -1,3 +1,4 @@
+# Derived from sunnypilot SCC-V / dragonpilot VisionTurnController - MIT License
 """Confidence-gated arbitration with frame hysteresis.
 
 Replaces the bare per-frame min() used by sunnypilot: sources enter the race

@@ -1,3 +1,4 @@
+# Derived from sunnypilot SCC-V / dragonpilot VisionTurnController - MIT License
 """Shared constants for SCC-X.
 
 Threshold lineage:

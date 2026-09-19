@@ -218,7 +218,7 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._decr_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._scc_x_toggle, self._decr_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
