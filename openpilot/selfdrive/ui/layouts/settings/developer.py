@@ -120,6 +120,18 @@ class DeveloperLayout(Widget):
       callback=lambda s: self._params.put_bool("SccXEnabled", s, block=True),
     )
 
+    self._decr_toggle = toggle_item(
+      lambda: tr("DEC-R Stock Radar Fusion"),
+      description=lambda: tr(
+        "Fuses the stock J428 radar's own deceleration request into longitudinal control as a "
+        "min()-only candidate (can brake earlier, never accelerate). Comfort/continuity "
+        "enhancement, not a safety feature; cannot see stationary obstacles. VW MLB (B8PA) only. "
+        "Only effective with openpilot longitudinal control (OP long)."
+      ),
+      initial_state=self._params.get_bool("DecrEnabled"),
+      callback=lambda s: self._params.put_bool("DecrEnabled", s, block=True),
+    )
+
     # sunnypilot onroad display toggles (sp_* ports)
     self._sp_turn_signals = toggle_item(
       lambda: tr("Large Turn Signal Icons"),
@@ -180,6 +192,7 @@ class DeveloperLayout(Widget):
       self._dlna_live_toggle,
       self._ui_debug_toggle,
       self._scc_x_toggle,
+      self._decr_toggle,
       self._sp_turn_signals,
       self._sp_blindspot,
       self._sp_torque_bar,
@@ -205,7 +218,7 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._decr_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
@@ -238,6 +251,7 @@ class DeveloperLayout(Widget):
       ("DlnaLiveEnabled", self._dlna_live_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
       ("SccXEnabled", self._scc_x_toggle),
+      ("DecrEnabled", self._decr_toggle),
       ("ShowTurnSignals", self._sp_turn_signals),
       ("BlindSpot", self._sp_blindspot),
       ("torqueBar", self._sp_torque_bar),
