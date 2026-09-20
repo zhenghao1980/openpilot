@@ -54,6 +54,11 @@ def chestnut_action(command):
 
 def compile_model(onnx_path, pkl_path):
   onnx_path, target_pkl_path = File(onnx_path).abspath, File(pkl_path).abspath
+  # fork: skip compilation when a prebuilt artifact is shipped in the repo
+  # (upstream Cinque v3 onnx is not public on GitHub LFS, so we ship the
+  # nightly-compiled pkl instead)
+  if os.path.exists(target_pkl_path):
+    return
   cmd = (f'{tg_flags} {mac_brew_string} {taskset}python3 "{compiler}/compile_onnx.py" '
          f'"{onnx_path}" "{target_pkl_path}" --out-of-band --benchmark-runs 1')
   lenv.Command(
@@ -70,6 +75,8 @@ for chestnut in [False, True] if CHESTNUT else [False]:
   file_prefix, cmd_flags = ('big_', chestnut_tg_flags) if chestnut else ('', tg_flags)
   for cam_w, cam_h in camera_configs:
     warp_pkl_path = File(f"models/{file_prefix}driving_warp_{cam_w}x{cam_h}_tinygrad.pkl").abspath
+    if os.path.exists(warp_pkl_path):
+      continue  # fork: prebuilt warp artifact shipped in repo
     stride, y_height, uv_height, _ = get_nv12_info(cam_w, cam_h)
     cmd = (f'{cmd_flags} {mac_brew_string} {taskset}python3 "{compiler}/compile_warp.py" '
            f'--frame {cam_w},{cam_h},{stride},{y_height},{uv_height},{stride * (y_height + uv_height)} '
@@ -83,6 +90,8 @@ for chestnut in [False, True] if CHESTNUT else [False]:
 dm_w, dm_h = DM_INPUT_SIZE
 for cam_w, cam_h in camera_configs:
   dm_pkl_path = File(f"models/dm_warp_{cam_w}x{cam_h}_tinygrad.pkl").abspath
+  if os.path.exists(dm_pkl_path):
+    continue  # fork: prebuilt warp artifact shipped in repo
   stride, y_height, uv_height, frame_size = get_nv12_info(cam_w, cam_h)
   cmd = (f'{tg_flags} {mac_brew_string} python3 "{compiler}/compile_warp.py" '
          f'--frame {cam_w},{cam_h},{stride},{y_height},{uv_height},{frame_size} --warp-to {dm_w}x{dm_h} '
