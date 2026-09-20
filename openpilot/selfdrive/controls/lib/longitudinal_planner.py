@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.scc import SccXController
+from openpilot.selfdrive.controls.lib.e2e_decel_shadow import E2EDecelShadow
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -72,6 +73,9 @@ class LongitudinalPlanner:
     self.j_desired_trajectory = np.zeros(CONTROL_N)
 
     self.scc_x = SccXController(CP)
+    # Passive shadow logger: records e2e no-lead decel episodes to
+    # /data/e2e_decel_shadow.jsonl. Never influences control outputs.
+    self.shadow = E2EDecelShadow(self.dt)
 
   def update(self, sm):
     if len(sm['carControl'].orientationNED) == 3:
@@ -162,6 +166,29 @@ class LongitudinalPlanner:
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
+
+    # Shadow logging (passive; exceptions must never propagate)
+    try:
+      leads = sm['modelV2'].leadsV3
+      m_prob = float(leads[0].prob) if len(leads) else 0.0
+      m_dist = float(leads[0].x[0]) if len(leads) and len(leads[0].x) else 0.0
+      vx = sm['modelV2'].velocity.x
+      self.shadow.update(
+        sm.logMonoTime['modelV2'] / 1e9,
+        experimental=sm['selfdriveState'].experimentalMode,
+        long_active=not long_control_off,
+        source_is_e2e=self.mpc.source == LongitudinalPlanSource.e2e,
+        radar_lead=sm['radarState'].leadOne.present,
+        a_target=float(self.output_a_target),
+        v_ego=v_ego,
+        gas_pressed=sm['carState'].gasPressed,
+        model_should_stop=bool(sm['modelV2'].action.shouldStop),
+        model_v10_ms=float(vx[-1]) if len(vx) else 0.0,
+        model_lead_prob=m_prob,
+        model_lead_dist_m=m_dist,
+      )
+    except Exception:
+      cloudlog.exception("e2e_decel_shadow update failed")
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
