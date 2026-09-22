@@ -12,11 +12,14 @@ def modeld_pkl_path(chestnut: bool):
   return MODELS_DIR / f'{prefix}driving_tinygrad.pkl'
 
 def load_oob(path, chestnut=False):
+  import os
+  os.environ.setdefault("PICKLE_OOB", "1")
   from tinygrad import Context
   device = 'USB+AMD:LLVM' if chestnut else 'QCOM' if AGNOS else 'METAL' if sys.platform == 'darwin' else 'CPU:LLVM'
   with Context(DEV=device):
-    from tinygrad_repo.examples.openpilot.helpers import load_pickle
-    return load_pickle(path, out_of_band=True)
+    from tinygrad_repo.examples.openpilot.compile3 import load_pickle
+    with open(path, "rb") as f:
+      return load_pickle(f)
 
 def chestnut_present() -> bool:
   for d in USB_DEVICES_PATH.glob("*"):
