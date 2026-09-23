@@ -132,7 +132,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     excessiveActuation @96;
     bigModelLoading @100;
     bigModelFailed @102;
-    lkasEnabled @104;
+    lkasEnabled @109;
     lkasDisabled @105;
     longEnabled @106;
     longDisabled @107;
