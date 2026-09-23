@@ -1,3 +1,6 @@
+import io
+import pickle
+import struct
 import sys
 from pathlib import Path
 
@@ -12,14 +15,26 @@ def modeld_pkl_path(chestnut: bool):
   return MODELS_DIR / f'{prefix}driving_tinygrad.pkl'
 
 def load_oob(path, chestnut=False):
-  import os
-  os.environ.setdefault("PICKLE_OOB", "1")
-  from tinygrad import Context
+  from tinygrad import Context, Tensor, dtypes
+  from tinygrad.device import Buffer, Device
   device = 'USB+AMD:LLVM' if chestnut else 'QCOM' if AGNOS else 'METAL' if sys.platform == 'darwin' else 'CPU:LLVM'
   with Context(DEV=device):
-    from tinygrad_repo.examples.openpilot.compile3 import load_pickle
+    # vendored from tinygrad examples/openpilot/helpers.py (removed upstream after the
+    # f6fc4e3f2 pin): persistent-id out-of-band format produced by compile_onnx.py
     with open(path, "rb") as f:
-      return load_pickle(f)
+      opcodes, buffers = f.read(struct.unpack('<q', f.read(8))[0]), Tensor(Path(path))[f.tell():].uop.buffer.ensure_allocated()
+
+    # FIXME: we load in chunks here because hcq_submit for one large copy is very slow to compile
+    arena, CHUNK_SIZE = Buffer(Device.DEFAULT, buffers.nbytes, dtypes.uchar, preallocate=True), 32 << 20
+    for off in range(0, buffers.nbytes, CHUNK_SIZE):
+      size = min(CHUNK_SIZE, buffers.nbytes-off)
+      arena.view(size, dtypes.uchar, off).ensure_allocated().copy_from(buffers.view(size, dtypes.uchar, off).ensure_allocated())
+
+    def persistent_load(pid): return arena.view(*pid)
+
+    u = pickle.Unpickler(io.BytesIO(opcodes))
+    u.persistent_load = persistent_load
+    return u.load()
 
 def chestnut_present() -> bool:
   for d in USB_DEVICES_PATH.glob("*"):
