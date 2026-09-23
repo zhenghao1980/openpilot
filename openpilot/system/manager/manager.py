@@ -141,6 +141,14 @@ def manager_thread() -> None:
     started_prev = started
     ignition_prev = ignition
 
+    # reap dead processes so ensure_running can restart them
+    # (upstream manager does this; without it one crash wedges a proc for
+    # the whole session because ManagerProcess.start() early-returns while
+    # self.proc is not None)
+    for p in managed_processes.values():
+      if p.proc is not None and p.proc.exitcode is not None and not p.shutting_down:
+        p.proc = None
+
     ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
