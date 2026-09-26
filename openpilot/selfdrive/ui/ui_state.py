@@ -125,8 +125,9 @@ class UIState:
     self.blindspot: bool = self.params.get_bool("BlindSpot")
     self.developer_ui: int = int(self.params.get("DevUIInfo") or 0)
     # mapd map panel state (mapd 功能说明书 4.3, v0.7 debug)
-    self.map_panel_enabled: bool = self.params.get_bool("MapPanelEnabled")
+    self.off_line_map_panel: bool = self.params.get_bool("OffLineMapPanel")
     self.map_orientation: int = int(self.params.get("MapOrientationMode") or 0)
+    self.map_panel_mode: int = 0  # 0=hidden, 1=right half, 2=fullscreen (in-memory, no param)
 
     self._params_thread: threading.Thread | None = None
 
@@ -293,8 +294,9 @@ class UIState:
     self.turn_signals = self.params.get_bool("ShowTurnSignals")
     self.blindspot = self.params.get_bool("BlindSpot")
     self.developer_ui = int(self.params.get("DevUIInfo") or 0)
-    self.map_panel_enabled = self.params.get_bool("MapPanelEnabled")
+    self.off_line_map_panel = self.params.get_bool("OffLineMapPanel")
     self.map_orientation = int(self.params.get("MapOrientationMode") or 0)
+    # map_panel_mode: in-memory only (nav icon click toggles it); do NOT reset here
     if not self.chestnut_compiled:
       self.chestnut_compiled = chestnut_compiled()
     self.chestnut_active = self.params.get("ChestnutActive")

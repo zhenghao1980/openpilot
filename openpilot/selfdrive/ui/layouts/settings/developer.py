@@ -125,8 +125,8 @@ class DeveloperLayout(Widget):
         "Right-half offline map panel: matched road, driven trail, "
         "nearby roads. Debug build."
       ),
-      initial_state=self._params.get_bool("MapPanelEnabled"),
-      callback=lambda s: self._params.put_bool("MapPanelEnabled", s, block=True),
+      initial_state=self._params.get_bool("OffLineMapPanel"),
+      callback=lambda s: self._params.put_bool("OffLineMapPanel", s, block=True),
     )
     self._scc_x_toggle = toggle_item(
       lambda: tr("SCC-X Curve Speed Control"),

@@ -81,13 +81,10 @@ class MapRenderClient:
       w, h, rgba = qoi_decode(bytes(f.img))
     except Exception:
       return self._tex
-    # ADAPT: pyray Image struct construction varies; fallback = gen_image_color + memmove
+    # ADAPT: pyray Image struct construction varies; new pyray takes Image(data, w, h, mipmaps, format)
     try:
-      img = rl.gen_image_color(w, h, rl.BLANK)
-      import ctypes
-      ctypes.memmove(img.data, rgba, len(rgba))
+      img = rl.Image(bytes(rgba), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
       tex = rl.load_texture_from_image(img)
-      rl.unload_image(img)
     except Exception:
       return self._tex
     if self._tex is not None and rl.is_texture_valid(self._tex):

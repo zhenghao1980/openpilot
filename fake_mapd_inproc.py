@@ -206,3 +206,18 @@ def spawn():
       _t.sleep(0.05)
 
   threading.Thread(target=loop, daemon=True, name="fake-mapd-inproc").start()
+# ---- standalone entrypoint ------------------------------------------------
+# Allow running as `python fake_mapd_inproc.py` so the wrapper can spawn it
+# as a dedicated process with its own msgq context (no fork inheritance).
+if __name__ == "__main__":
+  import signal as _sig
+  _sig.signal(_sig.SIGTERM, lambda *a: print("[fake-mapd-inproc] SIGTERM, exiting", flush=True))
+  _sig.signal(_sig.SIGINT,  lambda *a: print("[fake-mapd-inproc] SIGINT, exiting", flush=True))
+  spawn()
+  # Block forever (thread is daemon)
+  try:
+    import time as _t2
+    while True:
+      _t2.sleep(60)
+  except KeyboardInterrupt:
+    pass

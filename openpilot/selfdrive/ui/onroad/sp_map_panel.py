@@ -11,6 +11,7 @@ Orientation: MapOrientationMode param (0 heading-up / 1 north-up) — bearing is
 applied server-side; the frame is drawn unrotated.
 """
 import math
+import os
 import time
 from collections import deque
 
@@ -44,6 +45,14 @@ TRAIL_MIN_DIST = 5.0
 TRAIL_TIMEOUT  = 60.0
 SCALE_BAR_M    = 100.0
 CENTER_FRAC    = 0.5   # 与 maprenderd 视口中心一致（对齐关键点）
+ICON_SIZE      = 120
+ICON_PAD       = 30
+_NAV_ICON_CANDIDATES = [
+  os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "icons", "navigation", "launcher_route_light.png"),
+  "/home/zheng/openpilot/openpilot/selfdrive/assets/icons/navigation/launcher_route_light.png",
+]
+NAV_ICON_PATH  = next((p for p in _NAV_ICON_CANDIDATES if os.path.isfile(p)), _NAV_ICON_CANDIDATES[0])
+DBLCLICK_DT    = 0.35   # 双击间隔上限（秒）
 
 
 def _haversine_m(lat1, lon1, lat2, lon2):
@@ -68,6 +77,18 @@ class MapPanel:
     self._font = gui_app.font(FontWeight.NORMAL)
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._mr = MapRenderClient()
+    # nav icon: 右下角 launcher（mode=0 单图、mode=1/2 始终在右下角）
+    # nav icon: 右下角 launcher (openpilot 官方模式: gui_app.texture 自动加载+缩放+缓存)
+    self._nav_tex = None
+    try:
+      rel = os.path.relpath(NAV_ICON_PATH, "/home/zheng/openpilot/openpilot/selfdrive/assets")
+      self._nav_tex = gui_app.texture(rel, ICON_SIZE, ICON_SIZE)
+    except Exception as _e:
+      print(f"[sp_map_panel] nav icon load fail: {_e}", flush=True)
+    # 双击检测状态
+    self._last_click_t = 0.0
+    self._last_click_x = 0
+    self._last_click_y = 0
 
   def update(self, sm) -> None:
     if sm.updated['mapdExtendedOut']:
@@ -101,11 +122,17 @@ class MapPanel:
     return cx + dx * math.cos(r) - dy * math.sin(r), cy + dx * math.sin(r) + dy * math.cos(r)
 
   def render(self, rect: rl.Rectangle) -> None:
-    if not ui_state.started or not ui_state.map_panel_enabled:
+    if not ui_state.started or not ui_state.off_line_map_panel:
       return
 
     sm = ui_state.sm
-    mode = getattr(ui_state, "map_panel_mode", 1)   # 1 = 右半屏, 2 = 全屏
+    mode = ui_state.map_panel_mode  # 0=hidden, 1=right half, 2=fullscreen
+    # 缓存 content_rect，给 handle_tap 用
+    self._last_content_rect = (rect.x, rect.y, rect.width, rect.height)
+    if mode == 0:
+      # 仅显示右下角 nav launcher（背景透明）
+      self._draw_nav_icon(rect)
+      return
     if mode == 2:
       px, py, pw, ph = rect.x, rect.y, rect.width, rect.height
     else:
@@ -128,6 +155,7 @@ class MapPanel:
     view_m = min(max(v_ego * VIEW_SECS, VIEW_MIN_M), VIEW_MAX_M)
     mpp_screen = view_m / panel.height
     zoom = math.log2(math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * mpp_screen))
+    zoom = min(zoom, 16.0)   # 性能封顶：z14 数据 + llvmpipe，z19 静止视图无意义且过重
     bearing = gps.bearingDeg if sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0 else 0.0
     if ui_state.map_orientation == 1:
       bearing = 0.0
@@ -137,7 +165,14 @@ class MapPanel:
     tex = self._mr.frame_texture(sm)
     if tex is not None and rl.is_texture_valid(tex):
       w, h = self._mr._tex_size
-      rl.draw_texture_pro(tex, rl.Rectangle(0, 0, w, h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
+      # 按 tex 原比例裁剪 source rect，避免拉伸变形
+      # 目标: 完整显示 tex 不变形，居中裁剪 panel 区域
+      scale = max(panel.width / w, panel.height / h)
+      src_w = panel.width / scale
+      src_h = panel.height / scale
+      src_x = (w - src_w) / 2
+      src_y = (h - src_h) / 2
+      rl.draw_texture_pro(tex, rl.Rectangle(src_x, src_y, src_w, src_h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
 
     # ---- 叠加层投影（与底图同一相机：中心/zoom/bearing 完全一致） ----
     cx_w, cy_w = _mercator_xy(lat0, lon0)
@@ -204,3 +239,52 @@ class MapPanel:
     if ui_state.map_orientation == 1:
       rl.draw_circle(int(px + panel.width - 44), int(py + 104), 16, CARD)
       rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + panel.width - 50, py + 94), 24, 0, TEXT)
+
+    # nav icon launcher (右下角，与 mode=0 同一位置；mode=2 全屏下也保留以便单击关闭)
+    self._draw_nav_icon(rect)
+
+  def _draw_nav_icon(self, rect: rl.Rectangle) -> None:
+    # 模仿 exp_button.py: 圆形黑色背景 + 白色图标
+    if self._nav_tex is None:
+      return
+    # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 openpilot exp button border_size 一致)
+    r = ICON_SIZE // 2 + 10
+    cx = int(rect.x + rect.width - ICON_PAD - r)
+    cy = int(rect.y + rect.height - ICON_PAD - r)
+    rl.draw_circle(cx, cy, r, rl.Color(0, 0, 0, 166))
+    rl.draw_texture_ex(self._nav_tex, rl.Vector2(cx - self._nav_tex.width / 2, cy - self._nav_tex.height / 2),
+                       0.0, 1.0, rl.Color(255, 255, 255, 255))
+
+  def handle_tap(self, x: float, y: float) -> None:
+    """触屏点击路由：命中 nav icon -> toggle on/off；命中地图 panel + 双击 -> toggle 1<->2."""
+    if not ui_state.started or not ui_state.off_line_map_panel:
+      return
+    rect_x, rect_y, rect_w, rect_h = self._last_content_rect
+    # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 _draw_nav_icon 一致)
+    r = ICON_SIZE // 2 + 10
+    cx = rect_x + rect_w - ICON_PAD - r
+    cy = rect_y + rect_h - ICON_PAD - r
+    dx = x - cx
+    dy = y - cy
+    in_icon = (dx*dx + dy*dy) <= r*r
+
+    now = time.monotonic()
+    is_dblclick = (now - self._last_click_t <= DBLCLICK_DT
+                   and abs(x - self._last_click_x) <= 40
+                   and abs(y - self._last_click_y) <= 40)
+
+    if in_icon:
+      # 单击 nav icon: mode 0 -> 1；mode 1/2 -> 0 (关闭)
+      mode = ui_state.map_panel_mode
+      if mode == 0:
+        ui_state.map_panel_mode = 1
+      else:
+        ui_state.map_panel_mode = 0
+      return
+
+    # 命中地图 panel 区域：单击切 mode 1↔2
+    mode = ui_state.map_panel_mode
+    if mode == 1:
+      ui_state.map_panel_mode = 2
+    elif mode == 2:
+      ui_state.map_panel_mode = 1

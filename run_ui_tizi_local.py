@@ -295,5 +295,62 @@ if __name__ == "__main__":
         importlib.reload(_mm)
         import openpilot.system.manager as _mgr
         importlib.reload(_mgr)
+    # --- PC: map panel debug init (force enable and right-half mode for PC dev)
+        try:
+            from openpilot.common.params import Params
+            _p = Params()
+            _p.put_bool("OffLineMapPanel", True)
+            print("[wrapper] OffLineMapPanel=1 (nav icon only, click it to enter map panel)", flush=True)
+        except Exception as _e:
+            print(f"[wrapper] params put fail: {_e}", flush=True)
+
+    # --- PC 地图调试：给 UI 子进程的信号（env 继承，不 import UI 模块） ---
+    import os
+    os.environ["MAPD_FORCE_STARTED"] = "1"
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件 GL：WSLg 无 DRI3，EGL 默认走硬件路径必崩
+    os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
+
+    # --- PC：hardwared touch_thread 对 /dev/input/event* 调 fcntl(F_SETFL) ---
+    # fcntl 只收真 int fd（_FakeFile.fileno()=-1 必炸）；hardwared 用的是 os.open
+    # （builtins.open 管不到这条路径），故 patch os.open：给 /dev/null 真 fd，
+    # fcntl 合法、read 立即 EOF，线程自然空转。
+    _real_os_open = os.open
+    def _patched_os_open(path, flags, mode=0o777, *a, **kw):
+        if isinstance(path, str) and path.startswith('/dev/input/event'):
+            return _real_os_open('/dev/null', flags, mode)
+        return _real_os_open(path, flags, mode, *a, **kw)
+    os.open = _patched_os_open
+
+    # --- preflight：清理上轮残留的 msgq socket ---------------------------------
+    # 背景：上次 UI 进程若被 SIGKILL/崩溃，msgq publisher 注册残留在 socket 上，
+    # 重启时 MapRenderClient 的 PubMaster("mapRenderCam") 抛 MultiplePublishersError。
+    # 在此（尚无 openpilot 进程运行）清理是最安全的时机；B 方案（try/except 静默）
+    # 只会掩盖问题——发布器没建成就永远没有 mapRenderCam。
+    import glob as _glob
+    for _p in _glob.glob('/dev/shm/msgq_*') + _glob.glob('/tmp/msgq_*'):
+        try:
+            os.unlink(_p)
+            print(f"[wrapper] removed stale msgq: {_p}", flush=True)
+        except OSError:
+            pass
+
+    # --- preflight：等 fake_mapd 建好 msgq socket（publisher-first 时序门）---
+    # 竞态：若 UI 的 SubMaster 先于 publisher 连接，SUB 会创建空 shm 文件，
+    # publisher 后连也无法配对 → alive 恒 False（独立进程后启动所以正常）。
+    # 时序：清理残留（本块在前）-> fake_mapd 异步建 socket（Python 启动需秒级）-> 本等待 -> manager.main()。
+    # fake 的 Popen 在文件更前面也可：清理在 Popen 后毫秒级执行、早于 fake 连接（秒级），竞态安全。
+    import time as _time
+    _need = ['mapdOut', 'mapdExtendedOut', 'gpsLocationExternal', 'carState']
+    _deadline = _time.time() + 60
+    _missing = _need
+    while _time.time() < _deadline:
+        _missing = [x for x in _need if not os.path.exists(f'/dev/shm/msgq_{x}')]
+        if not _missing:
+            print("[wrapper] fake sockets ready (publisher-first)", flush=True)
+            break
+        _time.sleep(0.3)
+    if _missing:
+        print(f"[wrapper] WARN: fake sockets timeout, missing={_missing}", flush=True)
+
     try: manager.main()
     except KeyboardInterrupt: print("KeyboardInterrupt", flush=True)
