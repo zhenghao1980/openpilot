@@ -89,6 +89,13 @@ class DeveloperLayoutMici(NavScroller):
     self._scc_x_toggle = BigParamControl("scc-x curve speed", "SccXEnabled",
                                          description="Fused curve-speed control (dual vision estimators with confidence gating). "
                                                      "Map-based prediction (SCC-M) is reserved but not implemented yet.")
+    self._scc_x_map_toggle = BigParamControl("scc-x map curve source", "SccXMapEnabled",
+                                             description="tsc-d: offline OSM map curvature as a curve-speed source "
+                                                         "(SCC-M, mapd design v0.7). Requires downloaded map data; "
+                                                         "the road-name banner greys out when data is absent.")
+    self._map_panel_toggle = BigParamControl("map panel (debug)", "MapPanelEnabled",
+                                             description="Right-half offline map panel: matched road, driven trail, "
+                                                         "nearby roads. Debug build.")
     self._decr_toggle = BigParamControl("dec-r radar fusion", "DecrEnabled",
                                         description="Stock J428 radar deceleration fused into longitudinal as a min()-only "
                                                     "candidate (brake earlier, never faster). Comfort feature, no stationary "
@@ -109,6 +116,8 @@ class DeveloperLayoutMici(NavScroller):
       self._alpha_long_toggle,
       self._debug_mode_toggle,
       self._scc_x_toggle,
+      self._scc_x_map_toggle,
+      self._map_panel_toggle,
       self._decr_toggle,
       self._limit_step_toggle,
     ])
@@ -123,11 +132,13 @@ class DeveloperLayoutMici(NavScroller):
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._debug_mode_toggle),
       ("SccXEnabled", self._scc_x_toggle),
+      ("SccXMapEnabled", self._scc_x_map_toggle),
+      ("MapPanelEnabled", self._map_panel_toggle),
       ("DecrEnabled", self._decr_toggle),
       ("LimitTierStepEnabled", self._limit_step_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)
-    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._scc_x_toggle, self._decr_toggle, self._limit_step_toggle)
+    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._scc_x_toggle, self._scc_x_map_toggle, self._map_panel_toggle, self._decr_toggle, self._limit_step_toggle)
     engaged_blocked_toggles = (self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
 
     # Hide non-release toggles on release builds

@@ -73,6 +73,10 @@ class UIState:
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
+        "mapdOut",
+        "mapdExtendedOut",
+        "mapRenderFrame",
+        "mapRenderCam",
       ]
     )
 
@@ -120,6 +124,9 @@ class UIState:
     self.turn_signals: bool = self.params.get_bool("ShowTurnSignals")
     self.blindspot: bool = self.params.get_bool("BlindSpot")
     self.developer_ui: int = int(self.params.get("DevUIInfo") or 0)
+    # mapd map panel state (mapd 功能说明书 4.3, v0.7 debug)
+    self.map_panel_enabled: bool = self.params.get_bool("MapPanelEnabled")
+    self.map_orientation: int = int(self.params.get("MapOrientationMode") or 0)
 
     self._params_thread: threading.Thread | None = None
 
@@ -286,6 +293,8 @@ class UIState:
     self.turn_signals = self.params.get_bool("ShowTurnSignals")
     self.blindspot = self.params.get_bool("BlindSpot")
     self.developer_ui = int(self.params.get("DevUIInfo") or 0)
+    self.map_panel_enabled = self.params.get_bool("MapPanelEnabled")
+    self.map_orientation = int(self.params.get("MapOrientationMode") or 0)
     if not self.chestnut_compiled:
       self.chestnut_compiled = chestnut_compiled()
     self.chestnut_active = self.params.get("ChestnutActive")

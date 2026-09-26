@@ -1,0 +1,12 @@
+services:
+  tileserver:
+    image: maptiler/tileserver-gl:latest
+    container_name: tileserver
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./china.mbtiles:/data/china.mbtiles:ro
+      - ./style.json:/data/style.json:ro
+      - ./config.json:/data/config.json:ro
+    command: ["--port", "8080", "-c", "/data/config.json"]
+    restart: unless-stopped
