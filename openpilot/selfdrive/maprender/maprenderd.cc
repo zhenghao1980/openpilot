@@ -1,16 +1,18 @@
-// maprenderd v3: standalone MapLibre GL Native offscreen renderer (mln API, complete).
+// maprenderd: standalone MapLibre GL Native offscreen renderer for the map panel.
 //
-// Data path (all built-in, no custom file source):
-//   style.json vector source -> "tiles": ["mbtiles://<abs path>/{z}/{x}/{y}"]
-//   -> engine's built-in mln::MBTilesFileSource (sqlite, vendored core)
-//   glyphs -> file:// local dir
-// Frames: synchronous mln::HeadlessFrontend::render(Map&) -> unpremultiply -> QOI
-//   -> cereal "mapRenderFrame"; camera from "mapRenderCam" (UI, 10Hz).
-#include <algorithm>
+// Ported to the mln-namespace API (maplibre-native main >= namespace migration).
+// Architecture unchanged: this process owns its own headless GL context (zero
+// conflict with raylib UI); consumes "mapRenderCam" camera updates from the UI
+// and publishes QOI-encoded RGBA frames on "mapRenderFrame".
+//
+// Key API facts (verified against main headers 2026-09):
+//   - mln::HeadlessFrontend(Size, pixelRatio, ...)  [platform/default/include]
+//   - mln::HeadlessFrontend::render(Map&) -> RenderResult{PremultipliedImage,...}
+//     (SYNCHRONOUS — no observer/cv needed)
+//   - mln::Map(RendererFrontend&, MapObserver&, MapOptions, ResourceOptions, ...)
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -20,19 +22,20 @@
 #include <mln/map/map.hpp>
 #include <mln/map/map_observer.hpp>
 #include <mln/map/map_options.hpp>
-#include <mln/storage/file_source_manager.hpp>
 #include <mln/storage/resource_options.hpp>
-#include <mln/style/style.hpp>
+#include <mln/storage/file_source_manager.hpp>  // for FileSourceManager::registerFileSourceFactory
+#include <mln/storage/file_source.hpp>
+#include <mln/style/style.hpp>          // for Style::loadJSON()
 #include <mln/util/image.hpp>
 #include <mln/util/logging.hpp>
 #include <mln/util/run_loop.hpp>
-
-// 引擎内置 mbtiles 源（internal header，vendored 源码树内引用，CMake 已加 src include）
-#include <mln/storage/mbtiles_file_source.hpp>
+#include <mln/util/timer.hpp>
 
 #include "cereal/messaging/messaging.h"
 
-#include "qoi.h"
+#include "qoi.h"                      // vendored single-file encoder (public domain)
+// Built-in MBTilesFileSource from vendor core: register via FileSourceManager
+#include <mln/storage/mbtiles_file_source.hpp>
 
 namespace {
 
@@ -43,170 +46,175 @@ std::string loadFile(const char* path) {
   return ss.str();
 }
 
-// style.json 本地化：vector 源指向本地 mbtiles 绝对路径（引擎内置源按 URL 取文件），
-// glyphs 指到本地目录。最小字符串手术；如需更稳可换 nlohmann/json。
+// style.json surgery: rewrite the openmaptiles vector source URL from
+// `mbtiles://{openmaptiles}` (or `mbtiles://china` legacy) to
+// `mbtiles://<abs path>` so vendor MBTilesFileSource reads china.mbtiles
+// directly. glyphs URL is left untouched (style_no_text.json has none).
 std::string localizeStyle(const std::string& in, const std::string& mbtiles_abs) {
   std::string out = in;
-  // TileJSON-style source: the URL is a TileJSON endpoint. MBTilesFileSource reads
-  // the file's metadata table and synthesizes a TileJSON with `tiles: ["mbtiles://<abs>/{z}/{x}/{y}"]`.
-  // So we MUST pass the file path (no template) as the source url.
-  for (const std::string& alias : {"openmaptiles", "osm"}) {
-    const std::string from_plain = "\"url\": \"mbtiles://" + alias + "\"";
-    const std::string from_braces = "\"url\": \"mbtiles://{" + alias + "}\"";
+  for (const std::string& alias : {"{openmaptiles}", "openmaptiles", "{osm}", "osm"}) {
+    const std::string from = "\"url\": \"mbtiles://" + alias + "\"";
     const std::string to = "\"url\": \"mbtiles://" + mbtiles_abs + "\"";
-    for (const std::string& from : {from_plain, from_braces}) {
-      for (auto pos = out.find(from); pos != std::string::npos; pos = out.find(from))
-        out.replace(pos, from.size(), to);
-    }
+    for (auto pos = out.find(from); pos != std::string::npos; pos = out.find(from))
+      out.replace(pos, from.size(), to);
   }
-  const std::string gfrom = "\"glyphs\": \"https://fonts.openmaptiles.org/{fontstack}/{range}.pbf\"";
-  const std::string gto = "\"glyphs\": \"file:///data/mapd_render/glyphs/{fontstack}/{range}.pbf\"";
-  auto gp = out.find(gfrom);
-  if (gp != std::string::npos) out.replace(gp, gfrom.size(), gto);
   return out;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  // CLI: [style.json] [mbtiles] [--render-once lat lon zoom out.png]
-  const char* style_path = argc > 1 && argv[1][0] != '-' ? argv[1] : "/data/mapd_render/style.json";
-  const std::string mbtiles_path = argc > 2 && argv[2][0] != '-' ? argv[2] : "/data/mapd_render/china.mbtiles";
+  const char* style_path = argc > 1 ? argv[1] : "/data/mapd_render/style_no_text.json";
+  const char* mbtiles_path = argc > 2 ? argv[2] : "/data/mapd_render/china.mbtiles";
   const char* asset_root = "/data/mapd_render";
 
-  // --render-once mode: bypass SubMaster/PubMaster, render one frame, write PNG, exit.
-  // Used to verify the engine reads china.mbtiles + style.json outside WSLg.
-  bool render_once = false;
-  double ro_lat = 43.815, ro_lon = 125.281, ro_zoom = 12.0;
-  const char* ro_out = "/tmp/maprenderd_test.png";
-  for (int i = 1; i < argc; i++) {
-    if (std::strcmp(argv[i], "--render-once") == 0 && i + 4 < argc) {
-      render_once = true;
-      ro_lat = std::atof(argv[i+1]); ro_lon = std::atof(argv[i+2]);
-      ro_zoom = std::atof(argv[i+3]); ro_out = argv[i+4];
-      break;
-    }
-  }
-
-  mln::Log::setObserver(std::make_unique<mln::Log::NullObserver>());  // maplibre v5 用 Observer pattern；NullObserver 继承 Observer，不打印
-
-  // Force stdout/stderr line-buffered so manager-piped logs flush each print,
-  // not at process exit. Default for redirect-to-file is fully buffered.
+  mln::Log::setObserver(std::make_unique<mln::Log::NullObserver>());
   setvbuf(stdout, nullptr, _IOLBF, 0);
   setvbuf(stderr, nullptr, _IOLBF, 0);
 
-  mln::util::RunLoop runLoop(mln::util::RunLoop::Type::Default);  // mln/util/run_loop.hpp 已核实
-  (void)runLoop;
+  const float pixelRatio = 1.0f;
+  const uint32_t W = 960, H = 960;
 
-  // 内置 mbtiles 源注册到 FileSourceManager（若引擎已预注册同类，此处为幂等替换）
+  // Register vendor built-in MBTilesFileSource factory so style sources
+  // using mbtiles://<abs path> are read from the local china.mbtiles
+  // (mirrors what we did for the vendor mbgl-render tool earlier).
   mln::FileSourceManager::get()->registerFileSourceFactory(
       mln::FileSourceType::Mbtiles,
       [](const mln::ResourceOptions& ro, const mln::ClientOptions& co) {
         return std::make_unique<mln::MBTilesFileSource>(ro, co);
       });
 
-  const float pixelRatio = 1.0f;
-  const std::string style_json = localizeStyle(loadFile(style_path), mbtiles_path);
+  mln::HeadlessFrontend frontend(mln::Size{W, H}, pixelRatio);
+  fprintf(stderr, "[mr] HEADLESS_FRONTEND constructed size=%ux%u pixelRatio=%.1f\n", W, H, pixelRatio);
+  mln::MapObserver observer;  // 默认空实现（渲染走同步 render()，不需要回调）
+
+  mln::MapOptions mapOptions;
+  mapOptions.withMapMode(mln::MapMode::Static)
+      .withSize(frontend.getSize())
+      .withPixelRatio(pixelRatio);
+
   mln::ResourceOptions resourceOptions;
   resourceOptions.withCachePath(std::string(asset_root) + "/cache.db")
       .withAssetPath(asset_root);
-  mln::MapObserver observer;
 
-  uint32_t cur_w = 960, cur_h = 960;
-  std::unique_ptr<mln::HeadlessFrontend> frontend;
-  std::unique_ptr<mln::Map> map;
-  auto rebuild = [&](uint32_t w, uint32_t h) {
-    cur_w = w; cur_h = h;
-    frontend = std::make_unique<mln::HeadlessFrontend>(mln::Size{w, h}, pixelRatio);
-    mln::MapOptions mo;
-    mo.withMapMode(mln::MapMode::Static).withSize(frontend->getSize()).withPixelRatio(pixelRatio);
-    map = std::make_unique<mln::Map>(*frontend, observer, mo, resourceOptions);
-    map->getStyle().loadJSON(style_json);  // mln/style/style.hpp 已核实
-  };
-  rebuild(cur_w, cur_h);
+  mln::Map map(frontend, observer, mapOptions, resourceOptions);
+  fprintf(stderr, "[mr] MAP constructed mapmode=Static observer=%s\n",
+          typeid(observer).name());
 
-  if (render_once) {
-    // HeadlessFrontend::render() is the canonical API: it internally calls
-    // map.renderStill(callback) and waits until the render thread writes the
-    // image via backend->readStillImage(). This is what actually fills pixels.
-    map->jumpTo(mln::CameraOptions()
-                    .withCenter(mln::LatLng(ro_lat, ro_lon))
-                    .withZoom(ro_zoom)
-                    .withBearing(0));
-    auto res = frontend->render(*map);
-    auto img = std::move(res.image);
-    if (!img.valid()) {
-      fprintf(stderr, "[maprenderd] render-once: invalid image\n");
-      return 2;
-    }
-    const uint32_t W = img.size.width, H = img.size.height;
-    const uint8_t* src = img.data.get();
-    std::vector<uint8_t> rgba(W * H * 4);
-    for (uint32_t i = 0; i < W * H; i++) {
-      const uint8_t* p = src + i * 4;
-      uint8_t a = p[3];
-      rgba[i*4+0] = a ? (uint8_t)(p[0] * 255 / a) : 0;
-      rgba[i*4+1] = a ? (uint8_t)(p[1] * 255 / a) : 0;
-      rgba[i*4+2] = a ? (uint8_t)(p[2] * 255 / a) : 0;
-      rgba[i*4+3] = a;
-    }
-    std::ofstream f(ro_out, std::ios::binary);
-    f.write(reinterpret_cast<const char*>(rgba.data()), rgba.size());
-    f.close();
-    return 0;
-  }
+  const std::string style_raw = loadFile(style_path);
+  auto style = localizeStyle(style_raw, mbtiles_path);
+  fprintf(stderr, "[mr] style localized: in=%zuB out=%zuB mbtiles=%s\n",
+          style_raw.size(), style.size(), mbtiles_path);
+  map.getStyle().loadJSON(style);
+  fprintf(stderr, "[mr] style loaded OK size=%zuB\n", style.size());
 
   SubMaster sm({"mapRenderCam"});
   PubMaster pm({"mapRenderFrame"});
-  printf("[maprenderd] ready (style=%s mbtiles=%s)\n", style_path, mbtiles_path.c_str());
+  printf("[maprenderd] ready (style=%s mbtiles=%s)\n", style_path, mbtiles_path);
 
+  // RunLoop-driven render loop (mirrors vendor/glfw/glfw_view.cpp::run()):
+  //   - stack RunLoop on main thread
+  //   - 16ms timer tick -> callback that drains sm.update + jumpTo + render
+  //   - runLoop.run() blocks main thread; callback fires on RunLoop thread
+  //   - inside callback, RunLoop::Get() returns the current RunLoop, so
+  //     HeadlessFrontend::render(Map&) can spin RunLoop::runOnce() safely.
+  mln::util::RunLoop runLoop(mln::util::RunLoop::Type::Default);
   uint64_t rendered_seq = 0;
-  while (true) {
-    sm.update(100);
-    if (!sm.updated("mapRenderCam")) continue;
+  bool stop_flag = false;
+  mln::util::Timer frameTick;
 
-    auto c = sm["mapRenderCam"].getMapRenderCam();
-    const uint32_t rw = c.getWidth() ? c.getWidth() : cur_w;
-    const uint32_t rh = c.getHeight() ? c.getHeight() : cur_h;
-    if (rw != cur_w || rh != cur_h) {
-      if (rw >= 256 && rw <= 2048 && rh >= 256 && rh <= 2048) rebuild(rw, rh);
+  auto callback = [&] {
+    sm.update(0);  // non-blocking
+    if (sm.updated("mapRenderCam")) {
+      auto c = sm["mapRenderCam"].getMapRenderCam();
+      static int dbg_cam = 0;
+      if (++dbg_cam <= 5 || dbg_cam % 100 == 0)
+        fprintf(stderr, "[dbg] cam#%d (%.5f,%.5f) z%.2f b%.0f req=%ux%u\n",
+                dbg_cam, c.getLat(), c.getLon(), c.getZoom(), c.getBearing(),
+                c.getWidth(), c.getHeight());
+
+      // Skip invalid (0,0) cams from early UI bootstrap — calling renderStill
+      // with a bad camera sets stillImageRequest which then blocks all
+      // subsequent renders with "Map is currently rendering an image".
+      if (c.getLat() == 0.0 && c.getLon() == 0.0) {
+        return;
+      }
+
+      map.jumpTo(mln::CameraOptions()
+                     .withCenter(mln::LatLng(c.getLat(), c.getLon()))
+                     .withZoom(c.getZoom())
+                     .withBearing(c.getBearing()));
+
+      static int dbg_render = 0;
+      int render_id = ++dbg_render;
+      fprintf(stderr, "[mr] render#%d starting fully=%d\n",
+              render_id, (int)map.isFullyLoaded());
+      mln::HeadlessFrontend::RenderResult res;
+      try {
+        for (int i = 0; i < 3 && !map.isFullyLoaded(); i++) {
+          fprintf(stderr, "[mr] render#%d warmup pass %d\n", render_id, i);
+          res = frontend.render(map);
+        }
+        res = frontend.render(map);
+        fprintf(stderr, "[mr] render#%d returned img.data=%p size=%ux%u valid=%d\n",
+                render_id, (void*)res.image.data.get(),
+                res.image.size.width, res.image.size.height,
+                (int)res.image.valid());
+      } catch (const std::exception& e) {
+        fprintf(stderr, "[mr] render#%d threw typeid=%s what=[%s]\n",
+                render_id, typeid(e).name(), e.what());
+        return;
+      }
+
+      auto& img = res.image;
+      if (!img.data.get() || img.size.isEmpty()) {
+        fprintf(stderr, "[mr] render#%d skip frame: data=%p size.isEmpty=%d\n",
+                render_id, (void*)img.data.get(), (int)img.size.isEmpty());
+        return;
+      }
+
+      const size_t n = (size_t)img.size.width * img.size.height;
+      std::vector<uint8_t> rgba(n * 4);
+      for (size_t i = 0; i < n; i++) {
+        const uint8_t* p = img.data.get() + i * 4;
+        const uint8_t a = p[3];
+        rgba[i*4+0] = a ? (uint8_t)(p[0] * 255 / a) : 0;
+        rgba[i*4+1] = a ? (uint8_t)(p[1] * 255 / a) : 0;
+        rgba[i*4+2] = a ? (uint8_t)(p[2] * 255 / a) : 0;
+        rgba[i*4+3] = a;
+      }
+      int enc_len = 0;
+      qoi_desc qd;
+      qd.width = (unsigned int)img.size.width;
+      qd.height = (unsigned int)img.size.height;
+      qd.channels = 4;
+      qd.colorspace = 0x00;
+      void* enc = qoi_encode(rgba.data(), &qd, &enc_len);
+      if (!enc) {
+        fprintf(stderr, "[mr] render#%d qoi_encode FAILED size=%ux%u rgba_b=%p\n",
+                render_id, (unsigned)img.size.width, (unsigned)img.size.height,
+                (void*)rgba.data());
+        return;
+      }
+      fprintf(stderr, "[mr] render#%d qoi_encode OK size=%ux%u qoi=%dB\n",
+              render_id, (unsigned)img.size.width, (unsigned)img.size.height, enc_len);
+
+      MessageBuilder msg;
+      auto f = msg.initEvent().initMapRenderFrame();
+      f.setWidth(img.size.width);
+      f.setHeight(img.size.height);
+      f.setSeq(rendered_seq++);
+      f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
+      pm.send("mapRenderFrame", msg);
+      fprintf(stderr, "[mr] render#%d SENT seq=%llu qoi=%dB\n",
+              render_id, (unsigned long long)(rendered_seq - 1), enc_len);
+      free(enc);
     }
-    map->jumpTo(mln::CameraOptions()
-                    .withCenter(mln::LatLng(c.getLat(), c.getLon()))
-                    .withZoom(c.getZoom())
-                    .withBearing(c.getBearing()));
+  };
 
-    mln::HeadlessFrontend::RenderResult res;
-    for (int i = 0; i < 3 && !map->isFullyLoaded(); i++)
-      res = frontend->render(*map);
-    res = frontend->render(*map);
-
-    auto& img = res.image;
-    if (!img.data.get() || img.size.isEmpty()) continue;
-
-    const size_t n = (size_t)img.size.width * img.size.height;
-    std::vector<uint8_t> rgba(n * 4);
-    for (size_t i = 0; i < n; i++) {
-      const uint8_t* p = img.data.get() + i * 4;
-      const uint8_t a = p[3];
-      rgba[i*4+0] = a ? (uint8_t)(p[0] * 255 / a) : 0;
-      rgba[i*4+1] = a ? (uint8_t)(p[1] * 255 / a) : 0;
-      rgba[i*4+2] = a ? (uint8_t)(p[2] * 255 / a) : 0;
-      rgba[i*4+3] = a;
-    }
-    int enc_len = 0;
-    qoi_desc qd{(uint32_t)img.size.width, (uint32_t)img.size.height, 4, 0x00};  // named local, addressable
-    void* enc = qoi_encode(rgba.data(), &qd, &enc_len);
-    if (!enc) continue;
-
-    MessageBuilder msg;
-    auto f = msg.initEvent().initMapRenderFrame();
-    f.setWidth(img.size.width);
-    f.setHeight(img.size.height);
-    f.setSeq(rendered_seq++);
-    f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
-    pm.send("mapRenderFrame", msg);
-    free(enc);
-  }
+  // 16ms tick (60Hz cap, mirrors vendor/glfw/glfw_view.cpp tickDuration)
+  frameTick.start(mln::Duration::zero(), mln::Milliseconds(16), callback);
+  (void)stop_flag;  // reserved for future shutdown signal handler
+  runLoop.run();
   return 0;
 }

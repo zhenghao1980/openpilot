@@ -12,12 +12,12 @@ if(NOT MAPLIBRE_DIR)
   message(FATAL_ERROR "Set -DMAPLIBRE_DIR=<path to maplibre-native>")
 endif()
 
-# 后端标志（对照引擎根 CMakeLists 的 option 定义，2026-09 核实）：
+# 注释保留设备/通用两种 preset；WSL/PC 当前用 GLX preset（避免 EGL+DRI3 segfault）
 #   设备(AGNOS Linux + GLES): -DMLN_WITH_OPENGL=ON -DMLN_WITH_EGL=ON
-#   WSL:                      -DMLN_WITH_OPENGL=ON   (GLX via XWayland；EGL 亦可)
+#   WSL (Plan B 试 GLX):       -DMLN_WITH_OPENGL=ON -DMLN_WITH_EGL=OFF
 #   通用:                     -DMLN_WITH_GLFW=OFF -DBUILD_TESTING=OFF
 set(MLN_WITH_OPENGL ON CACHE BOOL "")
-set(MLN_WITH_EGL    ON CACHE BOOL "")
+set(MLN_WITH_EGL    OFF CACHE BOOL "")  # WSL/PC: 关闭 EGL,走 GLX via XWayland + llvmpipe
 set(MLN_WITH_GLFW   OFF CACHE BOOL "")
 set(BUILD_TESTING   OFF CACHE BOOL "")
 

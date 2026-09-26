@@ -97,9 +97,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SccXEnabled", {PERSISTENT, BOOL}},
     {"SccXMapEnabled", {PERSISTENT, BOOL, "1"}},  // tsc-d map source switch (v0.7: switch = intent, glyphs = state)
     {"MapdSettings", {PERSISTENT, STRING, ""}},   // mapd v2 JSON settings snapshot
-    {"MapPanelEnabled", {PERSISTENT, BOOL, "0"}}, // map panel (4.3, M4)
+    {"OffLineMapPanel", {PERSISTENT, BOOL, "0"}}, // off-line map panel (nav icon + double-click switch)
     {"MapOrientationMode", {PERSISTENT, INT, "0"}}, // 0 = heading-up, 1 = north-up
-    {"MapPanelMode", {PERSISTENT, INT, "1"}},       // 0 = off, 1 = right-half, 2 = fullscreen
     {"DecrEnabled", {PERSISTENT, BOOL, "0"}},
     {"LimitTierStepEnabled", {PERSISTENT, BOOL, "0"}},
     {"LongitudinalPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPersonality::STANDARD))}},

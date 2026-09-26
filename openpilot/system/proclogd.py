@@ -153,7 +153,7 @@ def _read_smaps(pid: int) -> SmapsData:
           elif parts[0] == b'Pss_Shmem:':
             result['pss_shmem'] += val
     return result
-  except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+  except (FileNotFoundError, PermissionError, ProcessLookupError, OSError, TypeError):
     return {'pss': 0, 'pss_anon': 0, 'pss_shmem': 0}
 
 
@@ -186,7 +186,7 @@ def _get_proc_extra(pid: int, name: str) -> ProcExtra:
     try:
       with open(f'/proc/{pid}/cmdline', 'rb') as f:
         cmdline = [c.decode('utf-8', errors='replace') for c in f.read().split(b'\0') if c]
-    except OSError:
+    except (OSError, TypeError):
       pass
     cache = {'pid': pid, 'name': name, 'exe': exe, 'cmdline': cmdline}
     _proc_cache[pid] = cache

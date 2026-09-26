@@ -93,7 +93,7 @@ class DeveloperLayoutMici(NavScroller):
                                              description="tsc-d: offline OSM map curvature as a curve-speed source "
                                                          "(SCC-M, mapd design v0.7). Requires downloaded map data; "
                                                          "the road-name banner greys out when data is absent.")
-    self._map_panel_toggle = BigParamControl("map panel (debug)", "MapPanelEnabled",
+    self._map_panel_toggle = BigParamControl("off-line map panel", "OffLineMapPanel",
                                              description="Right-half offline map panel: matched road, driven trail, "
                                                          "nearby roads. Debug build.")
     self._decr_toggle = BigParamControl("dec-r radar fusion", "DecrEnabled",
@@ -133,7 +133,7 @@ class DeveloperLayoutMici(NavScroller):
       ("ShowDebugInfo", self._debug_mode_toggle),
       ("SccXEnabled", self._scc_x_toggle),
       ("SccXMapEnabled", self._scc_x_map_toggle),
-      ("MapPanelEnabled", self._map_panel_toggle),
+      ("OffLineMapPanel", self._map_panel_toggle),
       ("DecrEnabled", self._decr_toggle),
       ("LimitTierStepEnabled", self._limit_step_toggle),
     )
