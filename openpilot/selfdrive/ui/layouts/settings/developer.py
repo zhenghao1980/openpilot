@@ -109,6 +109,25 @@ class DeveloperLayout(Widget):
     )
     self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
 
+    self._scc_x_map_toggle = toggle_item(
+      lambda: tr("SCC-X Map Curve Source"),
+      description=lambda: tr(
+        "tsc-d: offline OSM map curvature as a curve-speed source "
+        "(SCC-M, mapd design v0.7). Requires downloaded map data; "
+        "the road-name banner greys out when data is absent."
+      ),
+      initial_state=self._params.get_bool("SccXMapEnabled"),
+      callback=lambda s: self._params.put_bool("SccXMapEnabled", s, block=True),
+    )
+    self._map_panel_toggle = toggle_item(
+      lambda: tr("Map Panel (debug)"),
+      description=lambda: tr(
+        "Right-half offline map panel: matched road, driven trail, "
+        "nearby roads. Debug build."
+      ),
+      initial_state=self._params.get_bool("MapPanelEnabled"),
+      callback=lambda s: self._params.put_bool("MapPanelEnabled", s, block=True),
+    )
     self._scc_x_toggle = toggle_item(
       lambda: tr("SCC-X Curve Speed Control"),
       description=lambda: tr(
@@ -192,6 +211,8 @@ class DeveloperLayout(Widget):
       self._dlna_live_toggle,
       self._ui_debug_toggle,
       self._scc_x_toggle,
+      self._scc_x_map_toggle,
+      self._map_panel_toggle,
       self._decr_toggle,
       self._sp_turn_signals,
       self._sp_blindspot,
@@ -218,7 +239,7 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._scc_x_toggle, self._decr_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._scc_x_toggle, self._scc_x_map_toggle, self._map_panel_toggle, self._decr_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
