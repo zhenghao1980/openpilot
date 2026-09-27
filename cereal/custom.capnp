@@ -96,16 +96,16 @@ enum SpeedLimitOffsetType {
 
 enum MapdInputType {
   download @0;
-  reloadSettings @9;
-  saveSettings @10;
-  loadDefaultSettings @21;
-  loadRecommendedSettings @22;
-  loadPersistentSettings @26;
-  cancelDownload @27;
-  acceptSpeedLimit @34;
-  setJsonPathFloat @43;
-  setJsonPathText @44;
-  setJsonPathBool @45;
+  reloadSettings @1;
+  saveSettings @2;
+  loadDefaultSettings @3;
+  loadRecommendedSettings @4;
+  loadPersistentSettings @5;
+  cancelDownload @6;
+  acceptSpeedLimit @7;
+  setJsonPathFloat @8;
+  setJsonPathText @9;
+  setJsonPathBool @10;
   # DEPRECATED direct setters removed: UI must use the setJsonPath* commands.
 }
 
@@ -219,6 +219,7 @@ struct MapRenderCam @0x9a3b6c1d2e4f7081 {
   bearing @3 :Float32;
   width @4 :UInt32;
   height @5 :UInt32;
+  pitch @6 :Float32;   # 俯仰角（度）：0=俯视，60=3D 街景
 }
 
 struct MapRenderFrame @0x8b2a5d0c3f1e69072 {

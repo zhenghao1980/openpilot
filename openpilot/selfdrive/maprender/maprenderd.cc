@@ -143,7 +143,8 @@ int main(int argc, char** argv) {
       map.jumpTo(mln::CameraOptions()
                      .withCenter(mln::LatLng(c.getLat(), c.getLon()))
                      .withZoom(c.getZoom())
-                     .withBearing(c.getBearing()));
+                     .withBearing(c.getBearing())
+                     .withPitch(c.getPitch()));
 
       static int dbg_render = 0;
       int render_id = ++dbg_render;

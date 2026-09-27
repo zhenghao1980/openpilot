@@ -703,6 +703,11 @@ class GuiApplication:
     if language not in self._fallback_fonts:
       chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
       chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
+      # Register the full CJK Unified Ideographs range so dynamic strings
+      # (e.g. mapdOut.roadName "东大桥路") render without tofu, even though
+      # they're not present in app_<lang>.po.
+      if language.startswith("zh") or language in ("ja", "ko"):
+        chars.update(map(chr, range(0x4E00, 0x9FFF)))
       codepoints = sorted(map(ord, chars))
       codepoint_buffer = rl.ffi.new("int[]", codepoints)
       with as_file(FONT_DIR) as fspath:
