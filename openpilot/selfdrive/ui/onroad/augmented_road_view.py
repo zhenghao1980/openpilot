@@ -130,8 +130,7 @@ class AugmentedRoadView(CameraView):
 
   def _handle_mouse_press(self, mouse_pos):
     if not self._hud_renderer.user_interacting():
-      # 优先让 map panel 处理（nav icon / 地图 panel 双击）
-      self._map_panel.handle_tap(mouse_pos.x, mouse_pos.y)
+      # 地图 panel 触摸路由已由 sp_map_panel._poll_taps 自轮询接管 (见 handle_tap 内 hit_test)
       if self._click_callback is not None:
         self._click_callback()
 
