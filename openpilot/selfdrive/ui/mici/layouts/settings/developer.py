@@ -96,6 +96,9 @@ class DeveloperLayoutMici(NavScroller):
     self._map_panel_toggle = BigParamControl("off-line map panel", "OffLineMapPanel",
                                              description="Right-half offline map panel: matched road, driven trail, "
                                                          "nearby roads. Debug build.")
+    self._map_3d_toggle = BigParamControl("3d buildings", "Map3DEnabled",
+                                          description="Pitch 60° + fill-extrusion buildings on the offline map panel "
+                                                      "(city zoom z>=14 only; llvmpipe gets slow in dense areas).")
     self._decr_toggle = BigParamControl("dec-r radar fusion", "DecrEnabled",
                                         description="Stock J428 radar deceleration fused into longitudinal as a min()-only "
                                                     "candidate (brake earlier, never faster). Comfort feature, no stationary "
@@ -114,6 +117,7 @@ class DeveloperLayoutMici(NavScroller):
       self._scc_x_toggle,
       self._scc_x_map_toggle,
       self._map_panel_toggle,
+      self._map_3d_toggle,
       self._decr_toggle,
     ])
 
@@ -129,6 +133,7 @@ class DeveloperLayoutMici(NavScroller):
       ("SccXEnabled", self._scc_x_toggle),
       ("SccXMapEnabled", self._scc_x_map_toggle),
       ("OffLineMapPanel", self._map_panel_toggle),
+      ("Map3DEnabled", self._map_3d_toggle),
       ("DecrEnabled", self._decr_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)

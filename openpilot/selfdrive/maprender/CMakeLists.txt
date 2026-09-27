@@ -42,10 +42,10 @@ target_include_directories(maprenderd PRIVATE
 # (capnp + capnp-rpc + kj + kj-async + libsocketmaster + libmsgq).
 target_link_libraries(maprenderd PRIVATE
   mbgl-core
-  capnp
-  capnp-rpc
-  kj
-  kj-async
+  /home/zheng/openpilot/.venv/lib/libcapnp.a
+  /home/zheng/openpilot/.venv/lib/libcapnp-rpc.a
+  /home/zheng/openpilot/.venv/lib/libkj.a
+  /home/zheng/openpilot/.venv/lib/libkj-async.a
   /home/zheng/openpilot/openpilot/cereal/libsocketmaster.a
   /home/zheng/openpilot/msgq_repo/libmsgq.a
 )

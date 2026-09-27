@@ -99,6 +99,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MapdSettings", {PERSISTENT, STRING, ""}},   // mapd v2 JSON settings snapshot
     {"OffLineMapPanel", {PERSISTENT, BOOL, "0"}}, // off-line map panel (nav icon + double-click switch)
     {"MapOrientationMode", {PERSISTENT, INT, "0"}}, // 0 = heading-up, 1 = north-up
+    {"Map3DEnabled", {PERSISTENT, BOOL, "0"}},  // 3D buildings: pitch 60° + fill-extrusion (city zoom only)
     {"DecrEnabled", {PERSISTENT, BOOL, "0"}},
     {"LongitudinalPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPersonality::STANDARD))}},
     {"NetworkMetered", {PERSISTENT, BOOL}},

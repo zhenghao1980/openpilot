@@ -219,6 +219,7 @@ struct MapRenderCam @0x9a3b6c1d2e4f7081 {
   bearing @3 :Float32;
   width @4 :UInt32;
   height @5 :UInt32;
+  pitch @6 :Float32;   # 俯仰角（度）：0=俯视，60=3D 街景
 }
 
 struct MapRenderFrame @0x8b2a5d0c3f1e69072 {

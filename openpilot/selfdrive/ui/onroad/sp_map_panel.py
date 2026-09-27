@@ -17,7 +17,7 @@ from collections import deque
 
 import pyray as rl
 
-from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.application import gui_app, FontWeight, font_fallback
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.onroad.sp_map_tiles import EARTH_R
 from openpilot.selfdrive.ui.onroad.sp_maprender_client import MapRenderClient
@@ -215,7 +215,10 @@ class MapPanel:
     name = out.roadName or out.wayRef
     self._card(px + 16, py + 14, panel.width - 32, 64)
     if data_ok and name:
-      font = self._font_bold if not match_dim else self._font
+      # Use the system fallback font (NotoSansCJKsc with full CJK coverage
+      # as configured by the user in application.py / po file). Don't load a
+      # second atlas — that wastes raylib memory.
+      font = font_fallback(self._font_bold if not match_dim else self._font)
       color = TEXT if not match_dim else TEXT_DIM
       rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 30), 34, 0, color)
     else:

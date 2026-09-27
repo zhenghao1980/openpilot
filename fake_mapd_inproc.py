@@ -18,32 +18,51 @@ from openpilot.cereal import messaging, custom
 
 
 GPS_PATH = [
-  (43.8126, 125.28, 0.0),
-  (43.8128, 125.28, 0.0),
-  (43.813, 125.28, 0.0),
-  (43.8132, 125.28, 0.0),
-  (43.8134, 125.28, 0.0),
-  (43.8136, 125.28, 0.0),
-  (43.8138, 125.28, 0.0001),
-  (43.8140, 125.2801, 0.0008),
-  (43.8142, 125.2802, 0.0008),
-  (43.8144, 125.2803, 0.0004),
-  (43.8146, 125.2805, 0.0001),
-  (43.8148, 125.2806, 0.0),
-  (43.815, 125.2808, 0.0),
-  (43.8152, 125.281, 0.0),
-  (43.8154, 125.2812, 0.0),
-  (43.8156, 125.2814, 0.0),
-  (43.8158, 125.2816, 0.0),
-  (43.816, 125.2818, 0.0),
-  (43.8162, 125.282, 0.0),
-  (43.8164, 125.2822, 0.0),
+  (39.9100, 116.4500, 0.0),
+  (39.9100, 116.4508, 0.0),
+  (39.9100, 116.4516, 0.0),
+  (39.9100, 116.4524, 0.0),
+  (39.9100, 116.4532, 0.0),
+  (39.9100, 116.4540, 0.0),
+  (39.9100, 116.4548, 0.0001),
+  (39.9100, 116.4556, 0.0008),
+  (39.9100, 116.4564, 0.0008),
+  (39.9100, 116.4572, 0.0004),
+  (39.9100, 116.4580, 0.0001),
+  (39.9100, 116.4588, 0.0),
+  (39.9100, 116.4596, 0.0),
+  (39.9100, 116.4604, 0.0),
+  (39.9100, 116.4612, 0.0),
+  (39.9100, 116.4620, 0.0),
+  (39.9100, 116.4628, 0.0),
+  (39.9100, 116.4636, 0.0),
+  (39.9100, 116.4644, 0.0),
+  (39.9100, 116.4652, 0.0),
 ]
 
 NEARBY_ROADS = [
-  (3, "Nanhu East Rd", "E10", [(43.818, 125.282), (43.798, 125.282)]),
-  (5, "Ziyou Rd", "G302", [(43.812, 125.265), (43.812, 125.290)]),
+  (3, "Chang'an Ave East", "G102", [(39.910, 116.450), (39.910, 116.470)]),
+  (5, "Jianguo Outer Ring", "S50", [(39.913, 116.460), (39.901, 116.460)]),
 ]
+
+
+# Per-segment road name + ref, keyed by GPS_PATH idx range. Picks the current
+# road based on which segment the GPS sits on. roadName changes as GPS advances.
+# Format: "中文 / English" so the nav card shows both languages.
+ROAD_BY_IDX = [
+  (0, 4, "长安街东延 / Chang'an Ave E", "G102"),
+  (5, 8, "东大桥路 / Dongdaqiao Rd", "S41"),
+  (9, 12, "通惠河北路 / Tonghuihe N Rd", "G1"),
+  (13, 16, "亚运村东路 / Yayuncun E Rd", "S32"),
+  (17, 19, "来广营西路 / Laiguangying W Rd", "S310"),
+]
+
+
+def _road_at(idx: int):
+  for lo, hi, n, r in ROAD_BY_IDX:
+    if lo <= idx <= hi:
+      return n, r
+  return "长安街东延 / Chang'an Ave E", "G102"
 
 
 def _bearing(lat1, lon1, lat2, lon2):
@@ -156,8 +175,9 @@ def spawn():
         ccrv = GPS_PATH[idx][2] if GPS_PATH[idx] else 0.0
         mo = messaging.new_message('mapdOut')
         mo.valid = True
-        mo.mapdOut.roadName = "Yatai Street"
-        mo.mapdOut.wayRef = "G302"
+        road_name, road_ref = _road_at(idx)
+        mo.mapdOut.roadName = road_name
+        mo.mapdOut.wayRef = road_ref
         mo.mapdOut.tileLoaded = True
         mo.mapdOut.waySelectionType = "current"
         mo.mapdOut.mapCurveSpeed = 9.0 if ccrv > 0.0005 else 12.5
@@ -206,18 +226,3 @@ def spawn():
       _t.sleep(0.05)
 
   threading.Thread(target=loop, daemon=True, name="fake-mapd-inproc").start()
-# ---- standalone entrypoint ------------------------------------------------
-# Allow running as `python fake_mapd_inproc.py` so the wrapper can spawn it
-# as a dedicated process with its own msgq context (no fork inheritance).
-if __name__ == "__main__":
-  import signal as _sig
-  _sig.signal(_sig.SIGTERM, lambda *a: print("[fake-mapd-inproc] SIGTERM, exiting", flush=True))
-  _sig.signal(_sig.SIGINT,  lambda *a: print("[fake-mapd-inproc] SIGINT, exiting", flush=True))
-  spawn()
-  # Block forever (thread is daemon)
-  try:
-    import time as _t2
-    while True:
-      _t2.sleep(60)
-  except KeyboardInterrupt:
-    pass

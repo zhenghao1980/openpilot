@@ -62,7 +62,7 @@ class MapRenderClient:
     self._tex_size = (0, 0)
     self._last_cam_t = 0.0
 
-  def send_cam(self, lat, lon, zoom, bearing, width, height):
+  def send_cam(self, lat, lon, zoom, bearing, width, height, pitch=0.0):
     now = time.monotonic()
     if now - self._last_cam_t < 0.1:
       return
@@ -70,6 +70,7 @@ class MapRenderClient:
     msg = messaging.new_message("mapRenderCam")
     c = msg.mapRenderCam
     c.lat, c.lon, c.zoom, c.bearing = lat, lon, zoom, bearing
+    c.pitch = pitch
     c.width, c.height = width, height
     self._pm.send("mapRenderCam", msg)
 

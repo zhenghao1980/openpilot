@@ -301,6 +301,10 @@ if __name__ == "__main__":
             _p = Params()
             _p.put_bool("OffLineMapPanel", True)
             print("[wrapper] OffLineMapPanel=1 (nav icon only, click it to enter map panel)", flush=True)
+            _p.put_bool("Map3DEnabled", True)
+            print("[wrapper] Map3DEnabled=1 (3d buildings on)", flush=True)
+            _p.put("LanguageSetting", "zh-CHS")
+            print("[wrapper] LanguageSetting=zh-CHS (CJK fallback font active)", flush=True)
         except Exception as _e:
             print(f"[wrapper] params put fail: {_e}", flush=True)
 
