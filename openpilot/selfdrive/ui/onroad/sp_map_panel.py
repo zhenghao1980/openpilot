@@ -90,7 +90,21 @@ class MapPanel:
     self._last_click_x = 0
     self._last_click_y = 0
 
+  def _poll_taps(self) -> None:
+    """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
+
+    raylib 输入在 UI 进程全局有效，C3X 触摸即鼠标事件；is_mouse_button_pressed
+    为帧级沿触发，每帧最多一次。命中与否由 handle_tap 内 hit_test 决定。
+    rl.get_mouse_position() 返回 raylib logical 坐标，与绘制坐标系一致。
+    注意: nav icon 点击需要在 mode=0 时也能命中 (toggle 0->1)，所以只在 panel 隐藏时跳过。"""
+    if not ui_state.started or not ui_state.off_line_map_panel:
+      return
+    if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+      m = rl.get_mouse_position()
+      self.handle_tap(m.x, m.y)
+
   def update(self, sm) -> None:
+    self._poll_taps()
     if sm.updated['mapdExtendedOut']:
       pos = sm['mapdExtendedOut'].position
       cur = (pos.latitude, pos.longitude)
@@ -160,8 +174,12 @@ class MapPanel:
     if ui_state.map_orientation == 1:
       bearing = 0.0
 
+    # 3D pitch: 60° when panel's 2D/3D toggle is active + zoom deep enough.
+    # The toggle lives on the map panel itself; default = 2D (top-down).
+    pitch = 60.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
+
     # ---- 底图：向 maprenderd 发相机，取回帧 ----
-    self._mr.send_cam(lat0, lon0, zoom, bearing, int(panel.width), int(panel.height))
+    self._mr.send_cam(lat0, lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
     tex = self._mr.frame_texture(sm)
     if tex is not None and rl.is_texture_valid(tex):
       w, h = self._mr._tex_size
@@ -173,6 +191,10 @@ class MapPanel:
       src_x = (w - src_w) / 2
       src_y = (h - src_h) / 2
       rl.draw_texture_pro(tex, rl.Rectangle(src_x, src_y, src_w, src_h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
+
+    # ---- 右上角 2D/3D 切换按钮 (绘制和 hit_test 用同一 rect) ----
+    self._3d_pill_rect = self._3d_toggle_hit_rect(px, py, pw)
+    self._draw_3d_toggle_button(self._3d_pill_rect)
 
     # ---- 叠加层投影（与底图同一相机：中心/zoom/bearing 完全一致） ----
     cx_w, cy_w = _mercator_xy(lat0, lon0)
@@ -201,16 +223,18 @@ class MapPanel:
       self._stroke(pts, rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5,
                    rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5)
 
-    # ---- 箭头与卡片（同 v4） ----
-    gps_ok = sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 10.0
-    col = ARROW if gps_ok else rl.Color(150, 155, 162, 255)
+    # ---- 自车图标：蓝色圆形带白色向上箭头 (ego_circle_A.png) ----
+    if not hasattr(self, '_ego_loaded'):
+      self._ego_loaded = True
+      try:
+        self._tex_ego = gui_app.texture("icons/ego_circle_A.png", 64, 64)
+      except Exception as _e:
+        print(f"[sp_map_panel] ego icon load fail: {_e}", flush=True)
+        self._tex_ego = None
     rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
-    rl.draw_circle(int(cx), int(cy) + 2, 13, ARROW_RING)
-    head = [self._rotate(cx, cy - 18, cx, cy, rot_deg), self._rotate(cx - 10, cy + 4, cx, cy, rot_deg),
-            self._rotate(cx + 10, cy + 4, cx, cy, rot_deg)]
-    rl.draw_triangle(rl.Vector2(*head[0]), rl.Vector2(*head[1]), rl.Vector2(*head[2]), col)
-    s0 = self._rotate(cx - 4.5, cy + 2, cx, cy, rot_deg)
-    rl.draw_rectangle_rounded(rl.Rectangle(s0[0], s0[1], 9, 13), 0.4, 6, col)
+    if getattr(self, '_tex_ego', None) is not None:
+      half = 32
+      rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
 
     name = out.roadName or out.wayRef
     self._card(px + 16, py + 14, panel.width - 32, 64)
@@ -258,6 +282,37 @@ class MapPanel:
     rl.draw_texture_ex(self._nav_tex, rl.Vector2(cx - self._nav_tex.width / 2, cy - self._nav_tex.height / 2),
                        0.0, 1.0, rl.Color(255, 255, 255, 255))
 
+  def _3d_toggle_hit_rect(self, px: float, py: float, pw: float) -> rl.Rectangle:
+    """右上角 2D/3D 切换按钮的矩形。绘制和 hit_test 共用此函数返回的同一 rect。
+    按钮大小跟当前显示的图标一致: 2D=110x110, 3D=90x90。"""
+    is_3d = ui_state.map_panel_3d_active
+    size = 90 if is_3d else 110
+    pad_x = 24
+    pad_y = 100  # 避开 road name card (高 64 + pad 18)
+    return rl.Rectangle(px + pw - size - pad_x, py + pad_y, size, size)
+
+  def _load_3d_icons(self):
+    """懒加载 2D/3D 切换图标 texture (绝对路径引用桌面 icon)。"""
+    if not hasattr(self, '_3d_icons_loaded'):
+      self._3d_icons_loaded = True
+      icon_size = int(self._3d_toggle_hit_rect(None, 0, 0).width) if False else 110
+      try:
+        self._tex_2d = gui_app.texture("icons/map_2d.png", 110, 110)
+        self._tex_3d = gui_app.texture("icons/map_3d.png", 90, 90)
+      except Exception as e:
+        print(f"[mapd] icon load failed: {e}", flush=True)
+        self._tex_2d = self._tex_3d = None
+
+  def _draw_3d_toggle_button(self, rect: rl.Rectangle) -> None:
+    """绘制 2D/3D 切换图标。rect 必须与 handle_tap 用的 _3d_toggle_hit_rect 完全相同。
+    状态反着显示: 当前 2D 显示 3D 图标 (点切到 3D)，当前 3D 显示 2D 图标 (点切回 2D)。
+    图标按 rect 尺寸绘制 (rect 由 is_3d 状态决定 size=90 或 110)。"""
+    self._load_3d_icons()
+    is_3d = ui_state.map_panel_3d_active
+    tex = self._tex_3d if not is_3d else self._tex_2d
+    if tex is not None:
+      rl.draw_texture_ex(tex, rl.Vector2(rect.x, rect.y), 0.0, 1.0, rl.WHITE)
+
   def handle_tap(self, x: float, y: float) -> None:
     """触屏点击路由：命中 nav icon -> toggle on/off；命中地图 panel + 双击 -> toggle 1<->2."""
     if not ui_state.started or not ui_state.off_line_map_panel:
@@ -284,6 +339,16 @@ class MapPanel:
       else:
         ui_state.map_panel_mode = 0
       return
+
+    # 在 panel 外点 nav icon 已被上面 return；这里只处理 panel 内的点击
+    mode = ui_state.map_panel_mode
+
+    # 命中 2D/3D 切换图标: 用绘制时缓存的 self._3d_pill_rect (与 _draw 用同一实例)
+    if mode != 0 and hasattr(self, '_3d_pill_rect'):
+      r = self._3d_pill_rect
+      if rl.check_collision_point_rec(rl.Vector2(x, y), r):
+        ui_state.map_panel_3d_active = not ui_state.map_panel_3d_active
+        return
 
     # 命中地图 panel 区域：单击切 mode 1↔2
     mode = ui_state.map_panel_mode
