@@ -43,16 +43,25 @@ VIEW_SECS      = 8.
 TRAIL_MAX      = 600
 TRAIL_MIN_DIST = 5.0
 TRAIL_TIMEOUT  = 60.0
-SCALE_BAR_M    = 100.0
+SCALE_BAR_TARGET_PX = 120.0  # 比例尺目标像素长度：1-2-5 序列取不超过此值的最大档
+_SCALE_STEPS = (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000)
 CENTER_FRAC    = 0.5   # 与 maprenderd 视口中心一致（对齐关键点）
 ICON_SIZE      = 120
 ICON_PAD       = 30
+ICON_PAD_BOTTOM = 90   # 底缘让开底部状态卡/比例尺行（卡高 78px + 12px 间隙）
 _NAV_ICON_CANDIDATES = [
   os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "icons", "navigation", "launcher_route_light.png"),
   "/home/zheng/openpilot/openpilot/selfdrive/assets/icons/navigation/launcher_route_light.png",
 ]
 NAV_ICON_PATH  = next((p for p in _NAV_ICON_CANDIDATES if os.path.isfile(p)), _NAV_ICON_CANDIDATES[0])
 DBLCLICK_DT    = 0.35   # 双击间隔上限（秒）
+ZOOM_MIN       = 10.0   # mbtiles 数据下限，z10 以下瓦片过稀
+ZOOM_MAX       = 16.0   # 与自动 zoom 封顶一致
+ZOOM_MANUAL_MAX = 18.0  # 手动 +/- 允许超过自动封顶（z14 数据 overzoom，略糊但可用）
+ZOOM_HIT_PAD   = 14     # 按钮热区四周外扩（触屏/坐标偏移容错）
+ZOOM_STEP      = 1.0    # 每按一次 +/- 调一档
+ZOOM_BTN_R     = 20     # 缩放按钮半径（px）
+ZOOM_BIAS_LIM  = 8.0    # 手动 bias 限幅（最终 zoom 仍由 ZOOM_MIN/MAX clamp）
 
 
 def _haversine_m(lat1, lon1, lat2, lon2):
@@ -89,6 +98,10 @@ class MapPanel:
     self._last_click_t = 0.0
     self._last_click_x = 0
     self._last_click_y = 0
+    # 手动缩放状态：bias 叠加在自动 zoom 上（in-memory，与 map_panel_mode 同生命周期）
+    self._zoom_bias = 0.0
+    self._zoom_plus_rect = None
+    self._zoom_minus_rect = None
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -170,6 +183,10 @@ class MapPanel:
     mpp_screen = view_m / panel.height
     zoom = math.log2(math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * mpp_screen))
     zoom = min(zoom, 16.0)   # 性能封顶：z14 数据 + llvmpipe，z19 静止视图无意义且过重
+    # 手动缩放（+/- 按钮）：bias 叠加后 clamp；overlay 投影与比例尺必须用最终 zoom
+    # 反推 mpp_screen，否则底图（按 zoom 渲染）与矢量叠加（按 mpp 投影）错位
+    zoom = min(max(zoom + self._zoom_bias, ZOOM_MIN), ZOOM_MANUAL_MAX)
+    mpp_screen = math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * (2 ** zoom))
     bearing = gps.bearingDeg if sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0 else 0.0
     if ui_state.map_orientation == 1:
       bearing = 0.0
@@ -180,12 +197,14 @@ class MapPanel:
 
     # ---- 底图：向 maprenderd 发相机，取回帧 ----
     self._mr.send_cam(lat0, lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
+    mpp_view = mpp_screen  # 无底图时 overlay/比例尺退化为相机 mpp
     tex = self._mr.frame_texture(sm)
     if tex is not None and rl.is_texture_valid(tex):
       w, h = self._mr._tex_size
       # 按 tex 原比例裁剪 source rect，避免拉伸变形
       # 目标: 完整显示 tex 不变形，居中裁剪 panel 区域
       scale = max(panel.width / w, panel.height / h)
+      mpp_view = mpp_screen / scale if scale > 0 else mpp_screen  # 实际显示比例（含纹理放大）
       src_w = panel.width / scale
       src_h = panel.height / scale
       src_x = (w - src_w) / 2
@@ -208,7 +227,7 @@ class MapPanel:
       dy = (my - cy_w) * EARTH_R
       sx = dx * math.cos(b) - dy * math.sin(b)
       sy = dx * math.sin(b) + dy * math.cos(b)
-      return cx + sx / mpp_screen, cy - sy / mpp_screen
+      return cx + sx / mpp_view, cy - sy / mpp_view
 
     if len(self._trail) >= 2:
       pts = [to_screen(*p) for p in self._trail]
@@ -256,12 +275,33 @@ class MapPanel:
     else:
       status = "mapd offline"
     rl.draw_text_ex(self._font, f"match: {status}", rl.Vector2(px + 54, py + panel.height - 58), 26, 0, TEXT_DIM)
-    bar_px = SCALE_BAR_M / mpp_screen
-    bx, by = px + panel.width - 36 - bar_px, py + panel.height - 44
-    rl.draw_line_ex(rl.Vector2(bx, by), rl.Vector2(bx + bar_px, by), 3, TEXT)
+    # 比例尺：1-2-5 序列选不超过目标像素的最大档，单位随量级切 m/km
+    bar_m = _SCALE_STEPS[0]
+    for _s in _SCALE_STEPS:
+      if _s / mpp_view <= SCALE_BAR_TARGET_PX:
+        bar_m = _s
+      else:
+        break
+    bar_px = bar_m / mpp_view
+    bar_label = f"{bar_m} m" if bar_m < 1000 else f"{bar_m / 1000:g} km"
+    by = py + panel.height - 44
+    # 缩放 +/- 按钮：+ 贴面板右缘，比例尺在其左，- 再在比例尺左侧
+    zr, gap = ZOOM_BTN_R, 14
+    plus_cx = px + panel.width - 16 - zr
+    bx_right = plus_cx - zr - gap
+    bx = bx_right - bar_px
+    minus_cx = bx - gap - zr
+    btn_cy = by - 4
+    rl.draw_line_ex(rl.Vector2(bx, by), rl.Vector2(bx_right, by), 3, TEXT)
     rl.draw_line_ex(rl.Vector2(bx, by - 6), rl.Vector2(bx, by + 6), 2, TEXT)
-    rl.draw_line_ex(rl.Vector2(bx + bar_px, by - 6), rl.Vector2(bx + bar_px, by + 6), 2, TEXT)
-    rl.draw_text_ex(self._font, f"{int(SCALE_BAR_M)} m", rl.Vector2(bx - 6, by - 36), 24, 0, TEXT_DIM)
+    rl.draw_line_ex(rl.Vector2(bx_right, by - 6), rl.Vector2(bx_right, by + 6), 2, TEXT)
+    _tw = rl.measure_text_ex(self._font, bar_label, 24, 0).x
+    rl.draw_text_ex(self._font, bar_label, rl.Vector2(bx + (bar_px - _tw) / 2, by - 34), 24, 0, TEXT_DIM)
+    # 缓存按钮 rect 供 handle_tap 命中（与绘制同一圆心/半径）
+    self._zoom_plus_rect = rl.Rectangle(plus_cx - zr, btn_cy - zr, zr * 2, zr * 2)
+    self._zoom_minus_rect = rl.Rectangle(minus_cx - zr, btn_cy - zr, zr * 2, zr * 2)
+    self._draw_zoom_button(plus_cx, btn_cy, "+")
+    self._draw_zoom_button(minus_cx, btn_cy, "-")
 
     if ui_state.map_orientation == 1:
       rl.draw_circle(int(px + panel.width - 44), int(py + 104), 16, CARD)
@@ -277,10 +317,19 @@ class MapPanel:
     # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 openpilot exp button border_size 一致)
     r = ICON_SIZE // 2 + 10
     cx = int(rect.x + rect.width - ICON_PAD - r)
-    cy = int(rect.y + rect.height - ICON_PAD - r)
+    cy = int(rect.y + rect.height - ICON_PAD_BOTTOM - r)
     rl.draw_circle(cx, cy, r, rl.Color(0, 0, 0, 166))
     rl.draw_texture_ex(self._nav_tex, rl.Vector2(cx - self._nav_tex.width / 2, cy - self._nav_tex.height / 2),
                        0.0, 1.0, rl.Color(255, 255, 255, 255))
+
+  def _draw_zoom_button(self, cx: float, cy: float, label: str) -> None:
+    """圆形缩放按钮。圆心/半径与 handle_tap 的 _zoom_plus/minus_rect 一致。"""
+    r = ZOOM_BTN_R
+    rl.draw_circle(int(cx), int(cy), r, CARD)
+    rl.draw_circle_lines(int(cx), int(cy), r, DIVIDER)
+    # 固定偏移近似居中（+ 字形比 - 宽）
+    ox, oy = (10, 20) if label == "+" else (7, 22)
+    rl.draw_text_ex(self._font_bold, label, rl.Vector2(cx - ox, cy - oy), 36, 0, TEXT)
 
   def _3d_toggle_hit_rect(self, px: float, py: float, pw: float) -> rl.Rectangle:
     """右上角 2D/3D 切换按钮的矩形。绘制和 hit_test 共用此函数返回的同一 rect。
@@ -321,7 +370,7 @@ class MapPanel:
     # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 _draw_nav_icon 一致)
     r = ICON_SIZE // 2 + 10
     cx = rect_x + rect_w - ICON_PAD - r
-    cy = rect_y + rect_h - ICON_PAD - r
+    cy = rect_y + rect_h - ICON_PAD_BOTTOM - r
     dx = x - cx
     dy = y - cy
     in_icon = (dx*dx + dy*dy) <= r*r
@@ -339,6 +388,19 @@ class MapPanel:
       else:
         ui_state.map_panel_mode = 0
       return
+
+    # 缩放 +/- 按钮：命中即返回，不触发 panel 模式切换
+    if ui_state.map_panel_mode != 0:
+      pt = rl.Vector2(x, y)
+      pr, mr = getattr(self, '_zoom_plus_rect', None), getattr(self, '_zoom_minus_rect', None)
+      if pr is not None and (pr.x - ZOOM_HIT_PAD <= x <= pr.x + pr.width + ZOOM_HIT_PAD
+                             and pr.y - ZOOM_HIT_PAD <= y <= pr.y + pr.height + ZOOM_HIT_PAD):
+        self._zoom_bias = min(self._zoom_bias + ZOOM_STEP, ZOOM_BIAS_LIM)
+        return
+      if mr is not None and (mr.x - ZOOM_HIT_PAD <= x <= mr.x + mr.width + ZOOM_HIT_PAD
+                             and mr.y - ZOOM_HIT_PAD <= y <= mr.y + mr.height + ZOOM_HIT_PAD):
+        self._zoom_bias = max(self._zoom_bias - ZOOM_STEP, -ZOOM_BIAS_LIM)
+        return
 
     # 在 panel 外点 nav icon 已被上面 return；这里只处理 panel 内的点击
     mode = ui_state.map_panel_mode
