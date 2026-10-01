@@ -275,6 +275,16 @@ def _run_fake_mapd_inproc():
 # fake_mapd_inproc.spawn(), the second PubMaster construction fails with
 # 'Address already in use'. Spawn only in ui.py (try import guard).
 
+# --- PC: remove real mapd —— PC has no OSM db for it; it publishes empty
+# mapdOut/path every second and fights fake_mapd_inproc for the publisher
+# socket (msgq last-writer-wins), causing "offline map: no data" in the panel
+# and (0,0) camera that maprenderd skips. Drop it so fake_mapd_inproc owns the
+# topics exclusively.
+import openpilot.system.manager.process_config as _pc_mod
+_orig_procs = dict(_pc_mod.managed_processes)
+_pc_mod.managed_processes = {k: v for k, v in _orig_procs.items() if k != "mapd"}
+print(f"[wrapper] managed_processes: removed mapd ({len(_orig_procs)} -> {len(_pc_mod.managed_processes)})", flush=True)
+
 from openpilot.system.manager import manager
 if __name__ == "__main__":
     # Patch manager to always think we're onroad so it starts only_onroad
