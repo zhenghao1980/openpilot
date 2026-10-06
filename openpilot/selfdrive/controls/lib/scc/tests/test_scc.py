@@ -155,6 +155,7 @@ class TestControllerStateMachine(unittest.TestCase):
     c._v_arb, c._has_target = 0., False
     c._a_target = 0.
     c._leaving_finish_cnt = 0
+    c.map_enabled = True
     c.vision_a = SimpleNamespace(v_at_p97=20.0)
     c.vision_b = SimpleNamespace(overshoot=False, overshoot_distance=0., overshoot_speed=0.)
     return c
@@ -282,7 +283,7 @@ class TestControllerRegression(TestControllerStateMachine):
     c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0.02, confidence=0.9,
                                  overshoot=overshoot, overshoot_distance=overshoot_distance,
                                  overshoot_speed=overshoot_speed)
-    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, update_msg=lambda *a: None, set_a_lat_max=lambda *a: None, v_target=0., confidence=0., distance=0.)
     c.arbiter = arbiter.SccArbiter()
 
   def _sm(self):
@@ -464,11 +465,12 @@ class TestReviewV32Regressions(unittest.TestCase):
     c = object.__new__(SccXController)
     c.vision_a = SimpleNamespace(update=lambda m, v: 0., confidence=0.9, v_at_p97=20.)
     c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0., confidence=0.)
-    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, update_msg=lambda *a: None, set_a_lat_max=lambda *a: None, v_target=0., confidence=0., distance=0.)
     c.arbiter = arbiter.SccArbiter()
     c._v_ego = 20.0
     c._a_ego = 0.
     c._v_cruise = 33.0
+    c.map_enabled = True
     c._update_estimates(fake_model([0.0] * 10, [20.0] * 10), personality=None)
     self.assertEqual(c._a_lat_reg_max, constants.A_LAT_REG_MAX_BY_PERSONALITY[1])
 
@@ -489,10 +491,11 @@ class TestReviewV32Regressions(unittest.TestCase):
     c._v_arb, c._has_target = 10., True
     c._a_target = -1.0
     c._leaving_finish_cnt = 0
+    c.map_enabled = True
     c.vision_a = SimpleNamespace(update=lambda m, v: 3.0, confidence=0.9, v_at_p97=20.)
     c.vision_b = SimpleNamespace(update=lambda m, v, a: None, max_pred_curvature=0.,
                                  confidence=0., overshoot=False, overshoot_distance=0., overshoot_speed=0.)
-    c.map_est = SimpleNamespace(update=lambda v, a: None, v_target=0., confidence=0.)
+    c.map_est = SimpleNamespace(update=lambda v, a: None, update_msg=lambda *a: None, set_a_lat_max=lambda *a: None, v_target=0., confidence=0., distance=0.)
     c.arbiter = arbiter.SccArbiter()
     c.params = SimpleNamespace(get_bool=lambda k: True)
     sm = {'modelV2': fake_model([0.0] * 10, [20.0] * 10), 'controlsState': SimpleNamespace(curvature=0.0)}

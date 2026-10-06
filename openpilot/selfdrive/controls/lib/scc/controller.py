@@ -261,9 +261,12 @@ class SccXController:
     # Services must be registered and subscribed first (M1 cereal work); until
     # then sm.sock lacks the entry and the estimator stays invalid, so the
     # map source degrades to "absent" with no effect on control.
-    self.map_est.update_msg(sm['mapdExtendedOut'] if 'mapdExtendedOut' in sm.sock else None,
-                            sm['mapdOut'] if 'mapdOut' in sm.sock else None,
-                            sm.logMonoTime.get('mapdExtendedOut', 0))
+    # tolerate dict-like sm (unit tests): no sock table -> map source absent
+    _socks = getattr(sm, 'sock', None) or {}
+    _mono = getattr(sm, 'logMonoTime', None) or {}
+    self.map_est.update_msg(sm['mapdExtendedOut'] if 'mapdExtendedOut' in _socks else None,
+                            sm['mapdOut'] if 'mapdOut' in _socks else None,
+                            _mono.get('mapdExtendedOut', 0) if hasattr(_mono, 'get') else 0)
     self._update_estimates(sm['modelV2'], personality)
     prev_state = self.state
     self._update_state(long_enabled, long_override)

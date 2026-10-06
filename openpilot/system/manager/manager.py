@@ -123,7 +123,7 @@ def manager_thread() -> None:
   while True:
     sm.update(1000)
 
-    started = sm.valid['deviceState'] and sm['deviceState'].started or True  # _PC_FORCE_ONROAD
+    started = sm['deviceState'].started
 
     if started and not started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
