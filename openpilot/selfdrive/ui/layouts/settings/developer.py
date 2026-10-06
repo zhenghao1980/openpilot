@@ -205,6 +205,7 @@ class DeveloperLayout(Widget):
       self._ui_debug_toggle,
       self._scc_x_toggle,
       self._decr_toggle,
+      self._limit_step_toggle,
       self._sp_turn_signals,
       self._sp_blindspot,
       self._sp_torque_bar,
