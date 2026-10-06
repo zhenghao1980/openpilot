@@ -40,12 +40,14 @@ target_include_directories(maprenderd PRIVATE
 # cereal/messaging/messaging.h transitively pulls in capnp generated headers
 # and uses libsocketmaster.a + libmsgq.a. Same link line as the rest of openpilot
 # (capnp + capnp-rpc + kj + kj-async + libsocketmaster + libmsgq).
+# 平台相关预编译依赖（capnp/kj + socketmaster/msgq）：
+#   x64/WSL 默认链接仓库内构建产物；交叉编译（如 aarch64）时通过
+#   -DMAPRENDERD_PLATFORM_LIBS="<libcapnp.a>;<libkj.a>;..." 覆盖为对应架构的库
+set(MAPRENDERD_PLATFORM_LIBS
+  "/home/zheng/openpilot/.venv/lib/libcapnp.a;/home/zheng/openpilot/.venv/lib/libcapnp-rpc.a;/home/zheng/openpilot/.venv/lib/libkj.a;/home/zheng/openpilot/.venv/lib/libkj-async.a;/home/zheng/openpilot/openpilot/cereal/libsocketmaster.a;/home/zheng/openpilot/msgq_repo/libmsgq.a"
+  CACHE STRING "platform libs (capnp/kj/socketmaster/msgq), ;-separated")
+
 target_link_libraries(maprenderd PRIVATE
   mbgl-core
-  /home/zheng/openpilot/.venv/lib/libcapnp.a
-  /home/zheng/openpilot/.venv/lib/libcapnp-rpc.a
-  /home/zheng/openpilot/.venv/lib/libkj.a
-  /home/zheng/openpilot/.venv/lib/libkj-async.a
-  /home/zheng/openpilot/openpilot/cereal/libsocketmaster.a
-  /home/zheng/openpilot/msgq_repo/libmsgq.a
+  ${MAPRENDERD_PLATFORM_LIBS}
 )
