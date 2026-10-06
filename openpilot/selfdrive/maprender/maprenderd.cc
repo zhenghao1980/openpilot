@@ -10,6 +10,7 @@
 //   - mln::HeadlessFrontend::render(Map&) -> RenderResult{PremultipliedImage,...}
 //     (SYNCHRONOUS — no observer/cv needed)
 //   - mln::Map(RendererFrontend&, MapObserver&, MapOptions, ResourceOptions, ...)
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -124,6 +125,17 @@ int main(int argc, char** argv) {
   mln::util::Timer frameTick;
 
   auto callback = [&] {
+    // Reentrancy guard: frontend.render() spins RunLoop::runOnce() while the
+    // 16ms timer keeps firing; on slow first renders (tile load + shader
+    // compile) the tick re-enters this callback and MapLibre is not
+    // reentrant. Skip the tick when a previous invocation is still inside.
+    static std::atomic_flag in_callback = ATOMIC_FLAG_INIT;
+    if (in_callback.test_and_set()) return;
+    struct ClearFlag {
+      std::atomic_flag& f;
+      ~ClearFlag() { f.clear(); }
+    } clear_flag{in_callback};
+
     sm.update(0);  // non-blocking
     if (sm.updated("mapRenderCam")) {
       auto c = sm["mapRenderCam"].getMapRenderCam();
