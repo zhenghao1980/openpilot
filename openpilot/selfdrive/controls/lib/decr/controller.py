@@ -46,9 +46,7 @@ PARAMS_UPDATE_PERIOD = 1.0  # s
 KPH_TO_MS = 1.0 / 3.6
 MS_TO_KPH = 3.6
 
-# Trust downgrade shifts the band blend this much toward conservative per notch
-# (1.0 = full B1 params, 0.0 = full B3 params; one notch halves the blend).
-TRUST_NOTCH_STEP = 0.5
+_BAND_TO_IDX = {"B3": 0, "B2": 1, "B1": 2}
 
 
 @dataclass
@@ -69,7 +67,8 @@ class DecrOutput:
   fcw: bool = False               # request an FCW prompt (visual + audible)
   grid: str = "none"              # none | R1 | R2 | R3a | R3b | R3x (budget exit)
   event: str = "none"             # none | T1 | T2
-  band: str = "B2"
+  band: str = "B2"                # raw hysteresis-applied band (before trust downgrade)
+  eff_band: str = "B2"            # effective band after trust downgrade (params/gates use this)
   locked: bool = False
   armed: bool = False
   healthy: bool = False
@@ -96,9 +95,8 @@ class DecrController:
     self._lock_age_s = 0.0        # continuous locked time
     self._lock_lost_s = 0.0       # continuous unlocked time (disarm hysteresis)
 
-    # speed band (discrete, hysteresis) + continuous blend factor
+    # speed band (discrete, hysteresis)
     self._band = "B2"
-    self._band_t = 0.5            # 0.0 = B3 params, 1.0 = B1 params
 
     # grid / event state
     self._grid = "none"
@@ -149,16 +147,21 @@ class DecrController:
         self._band = "B1"
       elif v_kph <= BAND_B3_MAX_KPH - BAND_HYST_KPH:
         self._band = "B3"
-    span = BAND_B1_MIN_KPH - BAND_B3_MAX_KPH
-    self._band_t = min(max((v_kph - BAND_B3_MAX_KPH) / span, 0.0), 1.0)
 
-  def _lerp(self, pair: tuple[float, float], t: float) -> float:
-    b3, b1 = pair
-    return b3 + (b1 - b3) * t
+  def _effective_band(self) -> str:
+    """Band used for parameter lookup after trust-monitor downgrade.
 
-  def _t_eff(self) -> float:
-    """Band blend after trust-monitor downgrade (one notch = half the blend)."""
-    return min(max(self._band_t - TRUST_NOTCH_STEP * self._trust_notch, 0.0), 1.0)
+    One trust notch moves one step toward B3 (B1→B2, B2→B3); two notches
+    floors at B3. B3 cannot be downgraded further.
+    """
+    band_order = ["B3", "B2", "B1"]
+    idx = band_order.index(self._band)
+    idx = max(0, idx - self._trust_notch)
+    return band_order[idx]
+
+  def _band_param(self, params: tuple[float, float, float]) -> float:
+    """Look up a per-band parameter for the effective band."""
+    return params[_BAND_TO_IDX[self._effective_band()]]
 
   def _update_lock(self, radar: RadarInput, dt: float, arm_time_s: float) -> None:
     locked_raw = radar.relevant_obj != 0 and radar.abstandsindex < ABIDX_NO_TARGET
@@ -259,13 +262,13 @@ class DecrController:
 
     v_kph = v_ego * MS_TO_KPH
     self._update_band(v_kph)
-    t_eff = self._t_eff()
     out.band = self._band
-    arm_time = self._lerp(ARM_TIME_S, t_eff)
-    persist_s = self._lerp(R1_PERSIST_S, t_eff)
-    base_clip = self._lerp(BASE_CLIP, t_eff)
-    r3a_budget = self._lerp(R3A_BUDGET_S, t_eff)
-    t2_dist = self._lerp(T2_DIST_M, t_eff)
+    out.eff_band = self._effective_band()
+    arm_time = self._band_param(ARM_TIME_S)
+    persist_s = self._band_param(R1_PERSIST_S)
+    base_clip = self._band_param(BASE_CLIP)
+    r3a_budget = self._band_param(R3A_BUDGET_S)
+    t2_dist = self._band_param(T2_DIST_M)
 
     # -- lock ticket -----------------------------------------------------------
     self._update_lock(radar, dt, arm_time)
@@ -339,8 +342,9 @@ class DecrController:
       self._r3a_blocked = False
       self._r3a_budget_used = 0.0
 
-    # R3a in B3 (t_eff == 0): no full-follow, FCW prompt only
-    r3a_follow_allowed = t_eff > 0.0
+    # R3a in B3: no full-follow, FCW prompt only
+    eff_band = out.eff_band
+    r3a_follow_allowed = eff_band in ("B1", "B2")
     if grid == "R3a" and not r3a_follow_allowed:
       if radar.soll <= R3A_FCW_SOLL_TH:
         out.fcw = True
@@ -368,8 +372,8 @@ class DecrController:
           event = "T1"
       # T2 / v2 derivative feedforward: radar reacts 200-400 ms before the
       # vision filter converges; anticipate the staircase with its derivative.
-      v2_allowed = v_kph > V2_MIN_KPH and t_eff >= 0.5
-      t2_needs_vision = t_eff <= 0.0  # B3: vision corroboration required
+      v2_allowed = v_kph > V2_MIN_KPH and eff_band in ("B1", "B2")
+      t2_needs_vision = eff_band == "B3"  # B3: vision corroboration required
       # feedforward fires on the radar's onset ramp or a genuinely large speed
       # delta (2x the R1 approach threshold); a steady close-in stays with the
       # R1 deadzone so T2 doesn't silently replace it

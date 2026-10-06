@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from opendbc.car.structs import car
+from openpilot.selfdrive.car.cruise import ResDoubleTapGesture, LONG_SETTLE_FRAMES, RES_DOUBLE_TAP_WINDOW_FRAMES
 from openpilot.selfdrive.selfdrived.events import Events, ET, EventName
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
@@ -30,9 +31,9 @@ def _be(btn_type, pressed):
   return SimpleNamespace(type=btn_type, pressed=pressed)
 
 
-def _cs(button_events=(), v_ego=10.0, v_cruise=100.0, brake=False, standstill=False, cruise_available=True):
+def _cs(button_events=(), v_ego=10.0, v_cruise=100.0, gas=False, brake=False, standstill=False, cruise_available=True):
   return SimpleNamespace(buttonEvents=list(button_events), vEgo=v_ego, vCruise=v_cruise,
-                         brakePressed=brake, standstill=standstill,
+                         gasPressed=gas, brakePressed=brake, standstill=standstill,
                          cruiseState=SimpleNamespace(available=cruise_available))
 
 
@@ -278,9 +279,13 @@ class TestPendingGraStash(unittest.TestCase):
     c._cs_frame = 0
     c._pending_gra_cs = None
     c._pending_gra_frame = -1
+    c._res_gesture = ResDoubleTapGesture()
+    c.params = mock.Mock()
+    c.params.get_bool.return_value = True
     c.v_cruise_helper = mock.Mock()
     c.v_cruise_helper.v_cruise_kph = 0.0
     c.v_cruise_helper.v_cruise_cluster_kph = 0.0
+    c.v_cruise_helper.v_cruise_initialized = True
     c.CS_prev = _cs()
     c.CC_prev = SimpleNamespace(enabled=False, longActive=False)
     self._car_control = SimpleNamespace(enabled=False, longActive=False)
@@ -355,6 +360,167 @@ class TestPendingGraStash(unittest.TestCase):
     self._step(c, _cs(), enabled=True, long_active=False)
     self._step(c, _cs(), enabled=True, long_active=True)
     c.v_cruise_helper.initialize_v_cruise.assert_not_called()
+
+  def test_set_released_while_gas_pressed_initializes_immediately(self):
+    """SET released while the driver is pressing the gas: longitudinal is
+    blocked by gasPressedOverride, so vCruise must be initialized from the
+    stashed CarState immediately instead of waiting for longActive."""
+    c = self._make_card()
+    cs_set = SimpleNamespace(buttonEvents=[_be(ButtonType.setCruise, False)],
+                             vEgo=30.0, vCruise=255.0, gasPressed=True,
+                             brakePressed=False, standstill=False,
+                             cruiseState=SimpleNamespace(available=True))
+    self._step(c, cs_set, enabled=True, long_active=False)
+    c.v_cruise_helper.initialize_v_cruise.assert_called_once()
+    self.assertIs(c.v_cruise_helper.initialize_v_cruise.call_args[0][0], cs_set)
+    self.assertIs(c._pending_gra_cs, cs_set)
+
+  def test_res_released_while_gas_pressed_does_not_initialize(self):
+    """RES with no stored set speed stays a stock no-op even with gas pressed:
+    initializing here would seed a phantom stored speed that a later RES
+    would restore (selfdrived's resumeBlocked guard assumes vCruise stays
+    unset until a SET establishes it)."""
+    c = self._make_card()
+    c.v_cruise_helper.v_cruise_initialized = False
+    cs_res = SimpleNamespace(buttonEvents=[_be(ButtonType.resumeCruise, False)],
+                             vEgo=30.0, vCruise=255.0, gasPressed=True,
+                             brakePressed=False, standstill=False,
+                             cruiseState=SimpleNamespace(available=True))
+    self._step(c, cs_res, enabled=True, long_active=False)
+    c.v_cruise_helper.initialize_v_cruise.assert_not_called()
+
+  def test_join_gate_backstop_inits_when_uninitialized(self):
+    """Gas pressed AFTER the SET edge and held past the stash window: on
+    longActive join all three primary gate conditions are stale (enabled
+    already True, button frame gone, stash expired) — the uninitialized
+    backstop must init from the previous CarState (the freshest vEgo)."""
+    c = self._make_card()
+    c.v_cruise_helper.v_cruise_initialized = False
+    self._step(c, _cs(), enabled=True, long_active=False)
+    for _ in range(card_mod.PENDING_GRA_WINDOW_FRAMES + 1):
+      self._step(c, _cs(), enabled=True, long_active=False)
+    cs_prev = _cs()
+    self._step(c, cs_prev, enabled=True, long_active=True)
+    c.v_cruise_helper.initialize_v_cruise.assert_called_once()
+    self.assertEqual(c.v_cruise_helper.initialize_v_cruise.call_args[0][0].vEgo, cs_prev.vEgo)
+
+
+class TestResDoubleTapGesture(unittest.TestCase):
+  """card.py double-tap RES -> VCruiseHelper.limit_step_toggle gesture gating."""
+
+  def _make_card(self, feature_enabled=True):
+    c = card_mod.Car.__new__(card_mod.Car)
+    c.can_sock = None
+    c.CI = mock.Mock()
+    c.RI = mock.Mock()
+    c.RI.update.return_value = None
+    c.can_rcv_cum_timeout_counter = 0
+    c.is_metric = True
+    c.experimental_mode = False
+    c._cs_frame = 0
+    c._pending_gra_cs = None
+    c._pending_gra_frame = -1
+    c._res_gesture = ResDoubleTapGesture()
+    c.params = mock.Mock()
+    c.params.get_bool.return_value = feature_enabled
+    c.v_cruise_helper = mock.Mock()
+    c.v_cruise_helper.v_cruise_initialized = True
+    c.v_cruise_helper.v_cruise_kph = 100.0
+    c.v_cruise_helper.v_cruise_cluster_kph = 100.0
+    c.CS_prev = _cs()
+    c.CC_prev = SimpleNamespace(enabled=False, longActive=False)
+    self._car_control = SimpleNamespace(enabled=False, longActive=False)
+    c.sm = mock.Mock()
+    c.sm.__getitem__ = mock.Mock(side_effect=lambda k: self._car_control)
+    return c
+
+  def _step(self, c, cs, enabled=True, long_active=True):
+    c.CI.update.return_value = cs
+    self._car_control.enabled = enabled
+    self._car_control.longActive = long_active
+    with mock.patch.object(card_mod.messaging, "drain_sock_raw", return_value=[b"x"]), \
+         mock.patch.object(card_mod, "can_capnp_to_list", return_value=[]):
+      out, _ = c.state_update()
+    c.CS_prev = cs
+    c.CC_prev = SimpleNamespace(enabled=enabled, longActive=long_active)
+    return out
+
+  def _settle(self, c, n=LONG_SETTLE_FRAMES + 10):
+    # longitudinal continuously active past the gesture settle guard
+    for _ in range(n):
+      self._step(c, _cs())
+
+  def test_double_tap_triggers_once(self):
+    c = self._make_card()
+    self._settle(c)
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_called_once()
+
+  def test_single_tap_does_not_trigger(self):
+    c = self._make_card()
+    self._settle(c)
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_not_called()
+
+  def test_taps_too_far_apart_do_not_trigger(self):
+    c = self._make_card()
+    self._settle(c)
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    for _ in range(RES_DOUBLE_TAP_WINDOW_FRAMES + 1):
+      self._step(c, _cs())
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_not_called()
+
+  def test_triple_tap_triggers_once(self):
+    c = self._make_card()
+    self._settle(c)
+    for _ in range(3):
+      self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_called_once()
+
+  def test_unsettled_long_ignores_gesture(self):
+    c = self._make_card()
+    for _ in range(10):  # longActive, but below LONG_SETTLE_FRAMES
+      self._step(c, _cs())
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_not_called()
+
+  def test_feature_off_ignores_gesture(self):
+    c = self._make_card(feature_enabled=False)
+    self._settle(c)
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_not_called()
+
+  def test_long_inactive_resets_settle_and_tap_count(self):
+    c = self._make_card()
+    self._settle(c)
+    self._step(c, _cs(), long_active=False)  # long drops: counters reset
+    for _ in range(10):
+      self._step(c, _cs(), long_active=False)
+    for _ in range(LONG_SETTLE_FRAMES + 5):  # re-settle
+      self._step(c, _cs())
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    self._step(c, _cs([_be(ButtonType.resumeCruise, False)]))
+    c.v_cruise_helper.limit_step_toggle.assert_called_once()
+
+  def test_disengage_clears_limit_step(self):
+    c = self._make_card()
+    self._settle(c)
+    self._step(c, _cs(), enabled=False, long_active=False)
+    c.v_cruise_helper.clear_limit_step.assert_called_once()
+
+  def test_long_drop_only_keeps_limit_step(self):
+    """Separate lat/long: brake/cancel drops longitudinal but the overall state
+    stays enabled - the limit-step latch must survive (the ramp itself is
+    frozen helper-side via long_active until longitudinal rejoins)."""
+    c = self._make_card()
+    self._settle(c)
+    for _ in range(20):
+      self._step(c, _cs(), enabled=True, long_active=False)
+    c.v_cruise_helper.clear_limit_step.assert_not_called()
 
 
 if __name__ == "__main__":

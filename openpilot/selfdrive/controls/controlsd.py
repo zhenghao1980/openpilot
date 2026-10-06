@@ -282,6 +282,7 @@ class Controls:
     cs.decR.grid = dr.grid
     cs.decR.event = dr.event
     cs.decR.band = dr.band
+    cs.decR.effBand = dr.eff_band
     cs.decR.aRadarSoll = float(dr.soll)
     cs.decR.aRadarEff = float(dr.a_target) if dr.a_target is not None else 0.0
     cs.decR.locked = dr.locked

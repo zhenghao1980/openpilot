@@ -33,17 +33,22 @@ LOCK_DISARM_S = 0.3        # lock lost this long -> disarm (hysteresis)
 R3A_MIN_LOCK_AGE_S = 1.0   # R3a entry from cold requires lock held this long
 
 # --- speed bands (chapter 15 §8.4): vEgo kph, ±5 km/h hysteresis ------------
-# B2 (54-72) linearly blends the continuous parameters between B3 and B1.
-BAND_B3_MAX_KPH = 54.0     # initial value, A/B calibrate
-BAND_B1_MIN_KPH = 72.0     # initial value, A/B calibrate
+# B2 (50-80) is now an independently calibrated band, not an interpolation.
+# Boundaries adjusted from (54, 72) to (50, 80) based on local rlog analysis:
+#   - <=50 kph: mostly low-speed T1 emergency braking (B3)
+#   - 50-80 kph: mixed R3a/R1, highest DEC-R activation rate (B2)
+#   - >=80 kph: R3a-dominated high-speed cruise (B1)
+BAND_B3_MAX_KPH = 50.0     # initial value, A/B calibrate
+BAND_B1_MIN_KPH = 80.0     # initial value, A/B calibrate
 BAND_HYST_KPH = 5.0
 
-# Continuous per-band parameters, (B3_value, B1_value); B2 lerps between them.
-ARM_TIME_S = (2.0, 0.5)          # lock arm time
-R1_PERSIST_S = (0.8, 0.4)        # "radar brakes >0.3 more than OP" hold time
-BASE_CLIP = (-1.0, -1.5)         # base decel clip [m/s^2]
-R3A_BUDGET_S = (4.0, 6.0)        # continuous independent-braking budget in R3a
-T2_DIST_M = (40.0, 80.0)         # T2/feedforward engagement distance
+# Per-band parameters, indexed as (B3_value, B2_value, B1_value).
+# B2 values calibrated from local rlog analysis (2026-09-20 to 2026-10-06).
+ARM_TIME_S = (2.0, 0.9, 0.5)          # lock arm time [s]
+R1_PERSIST_S = (0.8, 0.45, 0.4)       # "radar brakes >0.3 more than OP" hold time [s]
+BASE_CLIP = (-1.0, -1.45, -1.5)       # base decel clip [m/s^2]
+R3A_BUDGET_S = (4.0, 5.5, 6.0)        # continuous independent-braking budget in R3a [s]
+T2_DIST_M = (40.0, 75.0, 80.0)        # T2/feedforward engagement distance [m]
 
 # --- R1 (vision steady + locked) ---------------------------------------------
 R1_DEADZONE = 0.2          # a_radar_eff = soll + deadzone (borrow less)

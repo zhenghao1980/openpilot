@@ -94,6 +94,10 @@ class DeveloperLayoutMici(NavScroller):
                                                     "candidate (brake earlier, never faster). Comfort feature, no stationary "
                                                     "obstacles. VW MLB (B8PA) only. Only effective with openpilot "
                                                     "longitudinal control (OP long).")
+    self._limit_step_toggle = BigParamControl("limit-tier step (2x RES)", "LimitTierStepEnabled",
+                                              description="Double-tap RES on the highway to gently ramp the set speed down "
+                                                          "to the next lower limit tier (60/80/100/120 kph) minus 1 kph for "
+                                                          "camera zones; double-tap again to restore. Longitudinal active only.")
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -106,6 +110,7 @@ class DeveloperLayoutMici(NavScroller):
       self._debug_mode_toggle,
       self._scc_x_toggle,
       self._decr_toggle,
+      self._limit_step_toggle,
     ])
 
     # Toggle lists
@@ -119,9 +124,10 @@ class DeveloperLayoutMici(NavScroller):
       ("ShowDebugInfo", self._debug_mode_toggle),
       ("SccXEnabled", self._scc_x_toggle),
       ("DecrEnabled", self._decr_toggle),
+      ("LimitTierStepEnabled", self._limit_step_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)
-    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._scc_x_toggle, self._decr_toggle)
+    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._scc_x_toggle, self._decr_toggle, self._limit_step_toggle)
     engaged_blocked_toggles = (self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
 
     # Hide non-release toggles on release builds

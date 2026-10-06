@@ -132,6 +132,18 @@ class DeveloperLayout(Widget):
       callback=lambda s: self._params.put_bool("DecrEnabled", s, block=True),
     )
 
+    self._limit_step_toggle = toggle_item(
+      lambda: tr("Limit-Tier Step (Double-Tap RES)"),
+      description=lambda: tr(
+        "Double-tap RES on the highway to gently ramp the set speed down to the "
+        "next lower limit tier (60/80/100/120 kph: ramp/tunnel/branch/mainline) "
+        "minus 1 kph for camera zones; double-tap again to restore the previous "
+        "set speed. Only responds while longitudinal control is active."
+      ),
+      initial_state=self._params.get_bool("LimitTierStepEnabled"),
+      callback=lambda s: self._params.put_bool("LimitTierStepEnabled", s, block=True),
+    )
+
     # sunnypilot onroad display toggles (sp_* ports)
     self._sp_turn_signals = toggle_item(
       lambda: tr("Large Turn Signal Icons"),
@@ -218,7 +230,7 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._scc_x_toggle, self._decr_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle, self._separate_lat_long_toggle, self._scc_x_toggle, self._decr_toggle, self._limit_step_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
@@ -252,6 +264,7 @@ class DeveloperLayout(Widget):
       ("ShowDebugInfo", self._ui_debug_toggle),
       ("SccXEnabled", self._scc_x_toggle),
       ("DecrEnabled", self._decr_toggle),
+      ("LimitTierStepEnabled", self._limit_step_toggle),
       ("ShowTurnSignals", self._sp_turn_signals),
       ("BlindSpot", self._sp_blindspot),
       ("torqueBar", self._sp_torque_bar),

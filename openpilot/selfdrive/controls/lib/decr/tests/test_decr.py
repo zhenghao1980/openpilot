@@ -205,16 +205,74 @@ class TestBands(unittest.TestCase):
     self.assertTrue(out.armed)
 
   def test_band_hysteresis(self):
-    # 70 km/h sits in B2; crossing to B1 needs 77, falling to B3 needs 49
+    # Boundaries at 50/80 with ±5 km/h hysteresis:
+    #   B2 -> B1 needs >= 85; B1 -> B2 needs < 75
+    #   B2 -> B3 needs <= 45; B3 -> B2 needs > 55
     ctrl = DecrController(is_mlb=True, params=FakeParams())
     out = run(ctrl, 60, v_ego=70.0 / 3.6)
     self.assertEqual(out.band, "B2")
-    out = run(ctrl, 5, v_ego=76.0 / 3.6)
-    self.assertEqual(out.band, "B2")
-    out = run(ctrl, 5, v_ego=78.0 / 3.6)
+    out = run(ctrl, 5, v_ego=86.0 / 3.6)
     self.assertEqual(out.band, "B1")
-    out = run(ctrl, 5, v_ego=70.0 / 3.6)
-    self.assertEqual(out.band, "B1")  # hysteresis holds until 67
+    out = run(ctrl, 5, v_ego=76.0 / 3.6)
+    self.assertEqual(out.band, "B1")  # still above B1->B2 drop threshold (75)
+    out = run(ctrl, 5, v_ego=74.0 / 3.6)
+    self.assertEqual(out.band, "B2")  # now below 75
+    out = run(ctrl, 5, v_ego=46.0 / 3.6)
+    self.assertEqual(out.band, "B2")  # still above B2->B3 drop threshold (45)
+    out = run(ctrl, 5, v_ego=44.0 / 3.6)
+    self.assertEqual(out.band, "B3")  # now <= 45
+
+
+class TestEffectiveBand(unittest.TestCase):
+  """Trust-monitor downgrades move the effective band toward B3.
+
+  This pins _effective_band semantics so that parameter lookup and R3a/T2
+  gating stay consistent with the band actually used by the controller.
+  """
+
+  def test_effective_band_downgrade_mapping(self):
+    ctrl = DecrController(is_mlb=True, params=FakeParams())
+    ctrl._band = "B1"
+    ctrl._trust_notch = 0
+    self.assertEqual(ctrl._effective_band(), "B1")
+
+    ctrl._trust_notch = 1
+    self.assertEqual(ctrl._effective_band(), "B2")
+
+    ctrl._trust_notch = 2
+    self.assertEqual(ctrl._effective_band(), "B3")
+
+    # B3 is the floor; further notches cannot make it more conservative
+    ctrl._trust_notch = 3
+    self.assertEqual(ctrl._effective_band(), "B3")
+
+  def test_b1_downgrade_one_notch_uses_b2_params(self):
+    ctrl = DecrController(is_mlb=True, params=FakeParams())
+    ctrl._band = "B1"
+    ctrl._trust_notch = 1
+    self.assertEqual(ctrl._effective_band(), "B2")
+    self.assertEqual(ctrl._band_param(constants.ARM_TIME_S), 0.9)
+    self.assertEqual(ctrl._band_param(constants.R1_PERSIST_S), 0.45)
+    self.assertEqual(ctrl._band_param(constants.BASE_CLIP), -1.45)
+    self.assertEqual(ctrl._band_param(constants.R3A_BUDGET_S), 5.5)
+    self.assertEqual(ctrl._band_param(constants.T2_DIST_M), 75.0)
+
+  def test_b1_downgrade_two_notch_blocks_r3a_and_t2(self):
+    ctrl = DecrController(is_mlb=True, params=FakeParams())
+    ctrl._band = "B1"
+    ctrl._trust_notch = 2
+    self.assertEqual(ctrl._effective_band(), "B3")
+    # B3 uses the most conservative params
+    self.assertEqual(ctrl._band_param(constants.ARM_TIME_S), 2.0)
+    self.assertEqual(ctrl._band_param(constants.BASE_CLIP), -1.0)
+    # R3a full-follow and T2 feedforward are gated by effective band
+    self.assertNotIn(ctrl._effective_band(), ("B1", "B2"))
+
+  def test_b3_cannot_be_downgraded(self):
+    ctrl = DecrController(is_mlb=True, params=FakeParams())
+    ctrl._band = "B3"
+    ctrl._trust_notch = 1
+    self.assertEqual(ctrl._effective_band(), "B3")
 
 
 class TestEvents(unittest.TestCase):

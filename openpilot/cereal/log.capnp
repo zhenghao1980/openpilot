@@ -1020,7 +1020,7 @@ struct DecRState {
   active @0 :Bool;          # a radar candidate is fused into aTarget this frame
   grid @1 :Text;            # none | R1 | R2 | R3a | R3b | R3x
   event @2 :Text;           # none | T1 | T2
-  band @3 :Text;            # B1 | B2 | B3 (hysteresis-applied)
+  band @3 :Text;            # B1 | B2 | B3 (raw hysteresis-applied band, before trust downgrade)
   aRadarSoll @4 :Float32;   # raw J428 ACC_Sollbeschleunigung [m/s^2]
   aRadarEff @5 :Float32;    # fused candidate actually applied [m/s^2]
   locked @6 :Bool;          # lock ticket conditions met this frame
@@ -1030,6 +1030,7 @@ struct DecRState {
   trustNotch @10 :UInt8;    # trust-monitor downgrades applied this trip
   fcw @11 :Bool;            # DEC-R requested an FCW prompt this frame
   trustEvent @12 :Bool;     # rising edge: trust notch jumped this frame (SOTIF review)
+  effBand @13 :Text;        # B1 | B2 | B3 (effective band after trust downgrade; used for params and follow gates)
 }
 
 struct DrivingModelData {

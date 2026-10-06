@@ -20,7 +20,7 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
-from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.cruise import LIMIT_STEP_ENABLED_PARAM, ResDoubleTapGesture, VCruiseHelper
 
 REPLAY = "REPLAY" in os.environ
 
@@ -174,6 +174,10 @@ class Car:
     self._pending_gra_frame = -1
     self._cs_frame = 0
 
+    # double-tap RES limit-step gesture (window/settle semantics live in
+    # ResDoubleTapGesture, cruise.py)
+    self._res_gesture = ResDoubleTapGesture()
+
     self.is_metric = self.params.get_bool("IsMetric")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
 
@@ -203,7 +207,8 @@ class Car:
     if can_rcv_valid and REPLAY:
       self.can_log_mono_time = messaging.log_from_bytes(can_strs[0]).logMonoTime
 
-    self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
+    self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric,
+                                         long_active=self.sm['carControl'].longActive)
     cc = self.sm['carControl']
     self._cs_frame += 1
     if not cc.longActive and any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
@@ -212,13 +217,23 @@ class Car:
       # the intent until longitudinal actually joins (may lag `enabled` by frames).
       self._pending_gra_cs = CS
       self._pending_gra_frame = self._cs_frame
+      # If the driver is pressing the gas, longActive is held False by
+      # gasPressedOverride until the pedal is released. Initialize the cruise
+      # speed immediately from the stashed CarState so the set speed is ready
+      # when longitudinal actually joins; otherwise the 200 ms stash window may
+      # expire while the driver keeps accelerating and vCruise stays unset.
+      # SET only: RES with no stored speed stays a stock no-op (selfdrived's
+      # resumeBlocked guard relies on vCruise staying unset in that case).
+      if CS.gasPressed and any(not b.pressed and b.type == ButtonType.setCruise for b in CS.buttonEvents):
+        self.v_cruise_helper.initialize_v_cruise(CS, self.experimental_mode)
     long_joined = cc.longActive and not self.CC_prev.longActive
     # The button that triggered engagement sits in the previous frame's CarState
     # (selfdrived acts on it, carControl comes back one frame later)
     set_or_resume_pressed = any(not b.pressed and b.type in (ButtonType.setCruise, ButtonType.resumeCruise)
                                 for b in self.CS_prev.buttonEvents)
     pending_gra_valid = self._pending_gra_cs is not None and (self._cs_frame - self._pending_gra_frame) <= PENDING_GRA_WINDOW_FRAMES
-    if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed or pending_gra_valid):
+    if long_joined and (not self.CC_prev.enabled or set_or_resume_pressed or pending_gra_valid or
+                        not self.v_cruise_helper.v_cruise_initialized):
       # Initialize cruise speed when longitudinal actually engages, not on the
       # overall enabled edge: in separate lat/long mode a lateral-only (ALA)
       # engagement must not set/display a cruise speed.
@@ -226,7 +241,10 @@ class Car:
       # or when longitudinal (re)joins via the user pressing SET/RES — then
       # initialize_v_cruise applies stock GRA semantics (SET=current speed,
       # RES=restore last). Gas-override resume (enabled stayed True, no button)
-      # must NOT re-init, or the driver's set speed would be lost.
+      # must NOT re-init, or the driver's set speed would be lost. Backstop:
+      # if vCruise was never initialized (gas held at the SET press, or gas
+      # pressed within the stash window and held past its 200 ms), init now —
+      # longitudinal cannot run with an unset set speed.
       # Use CarState w/ buttons from the step selfdrived enables on; if the GRA
       # intent was stashed earlier (longActive lagged enabled), that stashed
       # CarState is the authoritative one for SET-vs-RES semantics and vEgo.
@@ -238,6 +256,16 @@ class Car:
       self.v_cruise_helper.initialize_v_cruise(CS, self.experimental_mode)
     if cc.longActive:
       self._pending_gra_cs = None
+
+    # --- limit-tier step-down gesture (double-tap RES) ------------------------
+    res_release = any(b.type == ButtonType.resumeCruise and not b.pressed for b in CS.buttonEvents)
+    if self._res_gesture.update(self._cs_frame, cc.longActive, res_release) and \
+       self.params.get_bool(LIMIT_STEP_ENABLED_PARAM):
+      self.v_cruise_helper.limit_step_toggle()
+    # full disengage drops the latch; gas-override keeps it (enabled stays True,
+    # longActive drops only while the override event is present)
+    if self.CC_prev.enabled and not cc.enabled:
+      self.v_cruise_helper.clear_limit_step()
 
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
