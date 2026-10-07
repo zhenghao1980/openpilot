@@ -103,6 +103,10 @@ class MapPanel:
     self._zoom_plus_rect = None
     self._zoom_minus_rect = None
     self._last_zoom_btn_t = 0.0   # 防抖：WSLg/XTEST 可能产生幻影点击，限制缩放按钮触发频率
+    # 中心点平滑：mapdExtendedOut.position 仅 1Hz 刷新，直接跟随会每秒跳变一次。
+    # 指数平滑在渲染帧率下渐变逼近目标（tau ≈ 0.35s，稳定滞后约 v*tau 米）
+    self._ctr = None       # [lat, lon] 平滑后的中心
+    self._ctr_t = None     # 上次平滑时间戳
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -178,7 +182,21 @@ class MapPanel:
     match_dim = ws == 'possible'
     data_ok = sm.valid['mapdExtendedOut'] and len(ext.path) >= 2 and match_ok and tile_ok
 
-    lat0, lon0 = ext.position.latitude, ext.position.longitude
+    tlat, tlon = ext.position.latitude, ext.position.longitude
+    if not (sm.valid['mapdExtendedOut'] and data_ok):
+      self._ctr = None
+      self._ctr_t = None
+    if self._ctr is None or self._ctr_t is None:
+      self._ctr = [tlat, tlon]
+      self._ctr_t = time.monotonic()
+    else:
+      now = time.monotonic()
+      dt = max(now - self._ctr_t, 1e-3)
+      self._ctr_t = now
+      a = 1.0 - math.exp(-dt / 0.35)
+      self._ctr[0] += (tlat - self._ctr[0]) * a
+      self._ctr[1] += (tlon - self._ctr[1]) * a
+    lat0, lon0 = self._ctr
     v_ego = sm['carState'].vEgo
     view_m = min(max(v_ego * VIEW_SECS, VIEW_MIN_M), VIEW_MAX_M)
     mpp_screen = view_m / panel.height
