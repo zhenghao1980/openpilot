@@ -439,6 +439,13 @@ class MapPanel:
         dh = 128.0 * math.cos(math.radians(pitch))
         pos = to_screen(lat0, lon0)
         ex, ey = pos if pos is not None else (cx, cy)
+        # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
+        # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
+        ext = 18.0
+        rl.draw_ellipse(int(ex), int(ey + 5), 58.0, max(dh * 0.46, 8.0), rl.Color(0, 0, 0, 120))
+        rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
+                            rl.Rectangle(ex - 64, ey - dh / 2 - ext, 128.0, dh),
+                            rl.Vector2(64, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
                             rl.Rectangle(ex - 64, ey - dh / 2, 128.0, dh),
                             rl.Vector2(64, dh / 2), float(icon_rot), rl.WHITE)
