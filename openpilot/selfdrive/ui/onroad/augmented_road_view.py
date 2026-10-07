@@ -15,6 +15,7 @@ from openpilot.selfdrive.ui.onroad.sp_developer_ui import DeveloperUiRenderer, D
 from openpilot.selfdrive.ui.onroad.sp_torque_bar import TorqueBar
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.onroad.sp_map_panel import MapPanel
+from openpilot.selfdrive.ui.onroad.sp_speed_limit import SpeedLimitRenderer
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -65,6 +66,8 @@ class AugmentedRoadView(CameraView):
     self._sp_torque_bar = TorqueBar(scale=3.0, always=True)
     # mapd map panel (v0.7 debug)
     self._map_panel = MapPanel()
+    # mapd road speed limit sign (right of the set speed box)
+    self._sp_speed_limit = SpeedLimitRenderer()
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data
@@ -107,6 +110,8 @@ class AugmentedRoadView(CameraView):
     # SP overlays: speed + rocket fuel (Batch 1)
     self._sp_speed.update()
     self._sp_speed.render(self._content_rect)
+    self._sp_speed_limit.update()
+    self._sp_speed_limit.render(self._content_rect)
     self._sp_rocket_fuel.render(self._content_rect, ui_state.sm)
     self._sp_turn_signals.update()
     self._sp_turn_signals.render(self._content_rect)
