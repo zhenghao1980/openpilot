@@ -341,11 +341,17 @@ class MapPanel:
     # The toggle lives on the map panel itself; default = 2D (top-down).
     pitch = 45.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
 
-    # 导航视角（高德/苹果式）：3D heading-up 时相机中心沿航向提前 NAV_AHEAD_M，
-    # 车辆投影落在屏幕 ~62% 高度（视野看向远方，而非车钉死在屏幕中心）
+    # 导航视角（高德/苹果式）：3D heading-up 时相机中心沿航向提前一段距离，
+    # 车标落在屏幕下 1/3（画面 2/3 高度处，视野看向远方而非钉死屏幕中心）。
+    # 提前量必须随缩放动态换算：固定距离放大后会占更多像素，车标滑向底缘
+    # （z18 时几乎出屏）。由 _project3d 反解保持 φ=2/3 的提前量：
+    #   r = D/H = 1.5(2φ-1) / ((2φ-1)·sin p + f·cos p)，f=3，p=45° → r≈0.212
     cam_lat0, cam_lon0 = lat0, lon0
     if pitch > 0.5 and ui_state.map_orientation != 1:
-      cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, NAV_AHEAD_M)
+      pr = math.radians(pitch)
+      t = 2.0 * (2.0 / 3.0) - 1.0
+      r = 1.5 * t / (t * math.sin(pr) + 3.0 * math.cos(pr))
+      cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, r * panel.height * mpp_screen)
 
     # ---- 底图：向 maprenderd 发相机，取回帧 ----
     self._mr.send_cam(cam_lat0, cam_lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
