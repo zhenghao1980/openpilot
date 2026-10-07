@@ -351,7 +351,10 @@ class MapPanel:
       pr = math.radians(pitch)
       t = 2.0 * (2.0 / 3.0) - 1.0
       r = 1.5 * t / (t * math.sin(pr) + 3.0 * math.cos(pr))
-      cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, r * panel.height * mpp_screen)
+      # 注意单位：_project3d 的世界坐标系是 512*2^z（标准瓦片 256 的 2 倍），
+      # 1 世界px 的地面米数 = mpp_screen/2；直接用 mpp_screen 会把提前量放大
+      # 2 倍，全屏/缩小一档时车标被推出屏幕底缘（看不到图标）。
+      cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, r * panel.height * mpp_screen * 0.5)
 
     # ---- 底图：向 maprenderd 发相机，取回帧 ----
     self._mr.send_cam(cam_lat0, cam_lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
