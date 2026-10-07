@@ -78,6 +78,21 @@ def _mercator_xy(lat, lon):
   return x, y
 
 
+def _dest_point(lat, lon, bearing_deg, d_m):
+  """从 (lat, lon) 沿方位角走 d_m 米的终点坐标。"""
+  if d_m <= 0.0:
+    return lat, lon
+  R = 6371000.0
+  d = d_m / R
+  b = math.radians(bearing_deg)
+  la1 = math.radians(lat)
+  lo1 = math.radians(lon)
+  la2 = math.asin(math.sin(la1) * math.cos(d) + math.cos(la1) * math.sin(d) * math.cos(b))
+  lo2 = lo1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(la1),
+                         math.cos(d) - math.sin(la1) * math.sin(la2))
+  return math.degrees(la2), math.degrees(lo2)
+
+
 class MapPanel:
   def __init__(self):
     self._trail = deque(maxlen=TRAIL_MAX)
@@ -103,14 +118,14 @@ class MapPanel:
     self._zoom_plus_rect = None
     self._zoom_minus_rect = None
     self._last_zoom_btn_t = 0.0   # 防抖：WSLg/XTEST 可能产生幻影点击，限制缩放按钮触发频率
-    # 中心点：GPS 航位推算 + 1Hz 匹配位置修正（消快慢性交替）
-    # mapdExtendedOut.position 仅 1Hz 刷新，直接跟随会每秒跳变一次；
-    # 纯指数平滑会 1Hz 锯齿（先快追再慢收尾）。改用 10Hz GPS 连续推进：
-    # 每次匹配位置刷新时记录 gps→matched 的偏移锚点，平时中心=GPS+锚点。
-    # GPS 不可用时退化为指数平滑（tau ≈ 0.35s）
-    self._ctr = None       # [lat, lon] 平滑后的中心（降级路径用）
-    self._ctr_t = None     # 上次平滑时间戳
-    self._gps_anchor = None  # (dlat, dlon) 匹配位置相对 GPS 的偏移
+    # 中心点：GPS 速度外推 + 1Hz 匹配位置慢修正
+    # 10Hz GPS 固定解是阶梯；maprenderd 以自身节奏抽样（~5-8Hz），随机相位
+    # 采样阶梯会产生快慢交替的拍频。用速度×时间把最后固定解外推成连续轨迹，
+    # 1Hz 匹配位置与 GPS 的偏移只做慢低通修正（tau=1.5s，消除匹配量化抖动）。
+    self._ctr = None       # [lat, lon] 平滑后的中心（GPS 全失效时降级用）
+    self._ctr_t = None     # 上次渲染时间戳（兼作低通 dt）
+    self._gps_anchor = None  # (dlat, dlon) 匹配位置相对外推 GPS 的偏移（低通后）
+    self._gps_last = None  # (lat, lon, t_mono, speed, bearing) 最新 GPS 固定解
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -188,24 +203,45 @@ class MapPanel:
 
     tlat, tlon = ext.position.latitude, ext.position.longitude
     gps_ok = sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0
+    now = time.monotonic()
     if not (sm.valid['mapdExtendedOut'] and data_ok):
       self._ctr = None
       self._ctr_t = None
       self._gps_anchor = None
-    elif sm.updated['mapdExtendedOut'] and gps_ok:
-      # 1Hz 锚点刷新：记录当前 GPS 与匹配位置的偏移（含地图匹配修正量）
-      self._gps_anchor = (tlat - gps.latitude, tlon - gps.longitude)
-    if self._gps_anchor is not None and gps_ok:
-      # 10Hz GPS 连续推进 + 偏移修正 → 无 1Hz 跳变、无快慢性交替
-      lat0 = gps.latitude + self._gps_anchor[0]
-      lon0 = gps.longitude + self._gps_anchor[1]
+      self._gps_last = None
+    if gps_ok and sm.updated['gpsLocationExternal']:
+      self._gps_last = (gps.latitude, gps.longitude, now, gps.speed, gps.bearingDeg)
+    # 速度外推：把最后 GPS 固定解沿速度/方位角推到当前时刻 → 连续轨迹
+    g = self._gps_last
+    elat = elon = None
+    if g is not None:
+      dt_g = min(max(now - g[2], 0.0), 0.5)
+      elat, elon = _dest_point(g[0], g[1], g[4], g[3] * dt_g)
+    elif gps_ok:
+      elat, elon = gps.latitude, gps.longitude
+    if data_ok and elat is not None:
+      if sm.updated['mapdExtendedOut']:
+        # 1Hz 锚点测量值，慢低通收敛（tau=1.5s），吸收匹配位置量化抖动
+        meas = (tlat - elat, tlon - elon)
+        if self._gps_anchor is None:
+          self._gps_anchor = meas
+        else:
+          dt = max(now - (self._ctr_t or now), 1e-3)
+          a = 1.0 - math.exp(-dt / 1.5)
+          self._gps_anchor = (self._gps_anchor[0] + (meas[0] - self._gps_anchor[0]) * a,
+                              self._gps_anchor[1] + (meas[1] - self._gps_anchor[1]) * a)
+      self._ctr_t = now
+      if self._gps_anchor is not None:
+        lat0 = elat + self._gps_anchor[0]
+        lon0 = elon + self._gps_anchor[1]
+      else:
+        lat0, lon0 = elat, elon
     elif self._ctr is None or self._ctr_t is None:
+      # GPS 全不可用：退化为对 1Hz 匹配位置的指数平滑
       self._ctr = [tlat, tlon]
-      self._ctr_t = time.monotonic()
+      self._ctr_t = now
       lat0, lon0 = self._ctr
     else:
-      # GPS 不可用：退化为指数平滑
-      now = time.monotonic()
       dt = max(now - self._ctr_t, 1e-3)
       self._ctr_t = now
       a = 1.0 - math.exp(-dt / 0.35)
