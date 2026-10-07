@@ -91,11 +91,12 @@ BEAR_TURN_RATE = 110.0  # 视图方位角最大转速 °/s：转向时底图渐�
 NAV_AHEAD_M    = 120.0  # 3D 导航视角：相机中心沿航向提前量，车辆落在屏幕 ~62% 高度
 
 
-def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H):
+def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H, alt_m=0.0):
   """maplibre 相机一致的 3D 透视投影：经纬度 -> 渲染帧像素坐标。
 
   fov = 2*atan(1/3)（maplibre 默认，焦距 f=3），相机距地面中心 1.5*H 像素。
   标定方法：与 mbgl-render 同参数输出逐点比对（bearing 0/90 均吻合）。
+  alt_m: 海拔（米），沿世界竖直方向抬升（相机系分量 y2+=h·sin p, z+=h·cos p）。
   相机后方（z>=0）返回 None。
   """
   world = 512.0 * (2.0 ** zoom)
@@ -114,6 +115,12 @@ def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H):
   y1 = px_ * math.sin(bearing_rad) + yup * math.cos(bearing_rad)
   y2 = y1 * math.cos(pitch_rad)
   z = -y1 * math.sin(pitch_rad) - 1.5 * H
+  if alt_m > 0.0:
+    # 世界竖直方向经俯仰旋转后的相机系分量；hpx = 海拔换算成投影世界像素
+    # （512*2^z 坐标系，1 世界px = 2πR·cosφ/world 米）
+    hpx = alt_m * world / (2.0 * math.pi * EARTH_R * math.cos(math.radians(lat)))
+    y2 += hpx * math.sin(pitch_rad)
+    z += hpx * math.cos(pitch_rad)
   if z >= -1e-6:
     return None
   f = 3.0
@@ -429,14 +436,23 @@ class MapPanel:
         # 比例保持该大小（用户要求），只有放大到 20m 以内才继续长到 128px。
         isz = max(96.0, min(128.0, 44.0 / max(mpp_view, 1e-3)))
         dh = isz * math.cos(math.radians(pitch))
-        pos = to_screen(lat0, lon0)
+        # 图标锚在 1.5m 世界高度（真实车辆高度）：任何比例下都用海拔投影，
+        # 而非陷入地面；阴影仍留在地面点，车标微微悬于路面、影子在下方。
+        pos_ground = to_screen(lat0, lon0)
+        pos = pos_ground
+        if proj3d is not None:
+          fw, fh, brad, prad = proj3d
+          r3 = _project3d(lat0, lon0, cam_lat0, cam_lon0, zoom, brad, prad, fw, fh, alt_m=1.5)
+          if r3 is not None:
+            pos = _frame_to_panel(*r3)
         ex, ey = pos if pos is not None else (cx, cy)
+        gx, gy = pos_ground if pos_ground is not None else (ex, ey)
         # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
         # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
         # 阴影紧贴图标正下方（勿偏右下/过大，否则图标显得飞高）。
         # 挤出高度按真实世界高度(4m)随缩放换算：固定 10px 在 z16 相当于 18m 高柱。
         ext = max(1.0, min(24.0, 4.0 / max(mpp_view, 1e-3)))
-        rl.draw_ellipse(int(ex), int(ey + isz * 0.023), isz * 0.36, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
+        rl.draw_ellipse(int(gx), int(gy + isz * 0.023), isz * 0.36, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
                             rl.Rectangle(ex - isz / 2, ey - dh / 2 - ext, isz, dh),
                             rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
