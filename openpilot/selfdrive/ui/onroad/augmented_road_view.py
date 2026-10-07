@@ -135,7 +135,11 @@ class AugmentedRoadView(CameraView):
 
   def _handle_mouse_press(self, mouse_pos):
     if not self._hud_renderer.user_interacting():
-      # 地图 panel 触摸路由已由 sp_map_panel._poll_taps 自轮询接管 (见 handle_tap 内 hit_test)
+      # 地图 panel 触摸路由已由 sp_map_panel._poll_taps 自轮询接管 (见 handle_tap 内 hit_test)。
+      # 点在面板区域（含隐藏时的 nav icon）时不得再触发边栏回调，否则每次点地图
+      # 都会同时切边栏、布局跳动，导致面板按钮/切换失灵。
+      if self._map_panel.hit_test(mouse_pos.x, mouse_pos.y):
+        return
       if self._click_callback is not None:
         self._click_callback()
 

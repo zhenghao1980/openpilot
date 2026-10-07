@@ -36,7 +36,7 @@ TEXT_DIM  = rl.Color(130, 138, 150, 255)
 TEXT_NONE = rl.Color(100, 106, 116, 255)
 ACCENT_OK = rl.Color(76, 175, 80, 255)
 
-PANEL_W_FRAC   = 0.45
+PANEL_W_FRAC   = 0.5
 VIEW_MIN_M     = 200.
 VIEW_MAX_M     = 1200.
 VIEW_SECS      = 8.
@@ -457,6 +457,24 @@ class MapPanel:
     tex = self._tex_3d if not is_3d else self._tex_2d
     if tex is not None:
       rl.draw_texture_ex(tex, rl.Vector2(rect.x, rect.y), 0.0, 1.0, rl.WHITE)
+
+  def hit_test(self, x: float, y: float) -> bool:
+    """点 (x,y) 是否落在面板交互区（mode!=0 时为面板矩形；mode=0 时为 nav icon 圆）。
+    供外部（augmented_road_view._handle_mouse_press）抑制边栏点击回调——
+    否则点地图的同时会切边栏，布局一跳导致面板按钮失灵。"""
+    if not ui_state.started or not ui_state.off_line_map_panel:
+      return False
+    rx, ry, rw, rh = self._last_content_rect
+    mode = ui_state.map_panel_mode
+    if mode != 0:
+      if mode == 2:
+        return rx <= x <= rx + rw and ry <= y <= ry + rh
+      pw = rw * PANEL_W_FRAC
+      return (rx + rw - pw) <= x <= rx + rw and ry <= y <= ry + rh
+    r = ICON_SIZE // 2 + 10
+    cx = rx + rw - ICON_PAD - r
+    cy = ry + rh - ICON_PAD_BOTTOM - r
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
 
   def handle_tap(self, x: float, y: float) -> None:
     """触屏点击路由：命中 nav icon -> toggle on/off；命中地图 panel + 双击 -> toggle 1<->2."""
