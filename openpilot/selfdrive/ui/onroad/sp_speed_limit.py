@@ -1,5 +1,5 @@
 """
-Road speed limit sign for the onroad HUD (drawn right of the max cruise speed).
+Road speed limit sign for the onroad HUD (drawn below the max cruise speed).
 
 Data source: mapdOut (pfeiferj/mapd native service, offline OSM data) — no
 navigation required, works anywhere the local OSM tiles cover.
@@ -32,7 +32,7 @@ METER_TO_MILE = 0.000621371
 
 
 class SpeedLimitRenderer:
-  SIGN_SPACING = 24  # px between the set speed box and the sign
+  SIGN_SPACING = 24  # px between the set speed box and the sign (vertical gap now)
 
   def __init__(self):
     import time as _time
@@ -94,8 +94,9 @@ class SpeedLimitRenderer:
 
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
     sign_size = UI_CONFIG.set_speed_height - 40
-    x = rect.x + 60 + set_speed_width + self.SIGN_SPACING
-    y = rect.y + 45 + (UI_CONFIG.set_speed_height - sign_size) / 2
+    # 挪到最大巡航速度指示牌正下方，水平居中
+    x = rect.x + 60 + (set_speed_width - sign_size) / 2
+    y = rect.y + 45 + UI_CONFIG.set_speed_height + self.SIGN_SPACING
     sign_rect = rl.Rectangle(x, y, sign_size, sign_size)
 
     is_overspeed = ui_state.sm["carState"].vEgo > self.speed_limit

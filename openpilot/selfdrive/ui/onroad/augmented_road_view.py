@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.onroad.sp_turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.onroad.sp_developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
 from openpilot.selfdrive.ui.onroad.sp_torque_bar import TorqueBar
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
-from openpilot.selfdrive.ui.onroad.sp_map_panel import MapPanel
+from openpilot.selfdrive.ui.onroad.sp_map_panel import MapPanel, PANEL_W_FRAC
 from openpilot.selfdrive.ui.onroad.sp_speed_limit import SpeedLimitRenderer
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
@@ -87,41 +87,52 @@ class AugmentedRoadView(CameraView):
       rect.height - 2 * UI_BORDER_SIZE,
     )
 
+    # 半屏地图 (mode 1): 行车画面 + HUD 缩到左半边 (1-PANEL_W_FRAC)，右半边留给地图。
+    # 地图 panel 仍拿完整 _content_rect——它内部按全宽算右半区域，保证两边无缝衔接。
+    view_rect = self._content_rect
+    if ui_state.map_panel_mode == 1:
+      view_rect = rl.Rectangle(
+        self._content_rect.x,
+        self._content_rect.y,
+        self._content_rect.width * (1.0 - PANEL_W_FRAC),
+        self._content_rect.height,
+      )
+
     # Enable scissor mode to clip all rendering within content rectangle boundaries
     # This creates a rendering viewport that prevents graphics from drawing outside the border
     rl.begin_scissor_mode(
-      int(self._content_rect.x),
-      int(self._content_rect.y),
-      int(self._content_rect.width),
-      int(self._content_rect.height)
+      int(view_rect.x),
+      int(view_rect.y),
+      int(view_rect.width),
+      int(view_rect.height)
     )
 
     # Render the base camera view
-    super()._render(self._content_rect)
+    super()._render(view_rect)
 
     # Draw all UI overlays
-    self.model_renderer.render(self._content_rect)
-    self._hud_renderer.render(self._content_rect)
-    self.alert_renderer.render(self._content_rect)
-    self.driver_state_renderer.render(self._content_rect)
+    self.model_renderer.render(view_rect)
+    self._hud_renderer.render(view_rect)
+    self.alert_renderer.render(view_rect)
+    self.driver_state_renderer.render(view_rect)
 
     # Custom UI extension point - add custom overlays here
-    # Use self._content_rect for positioning within camera bounds
+    # Use view_rect for positioning within camera bounds
     # SP overlays: speed + rocket fuel (Batch 1)
     self._sp_speed.update()
-    self._sp_speed.render(self._content_rect)
+    self._sp_speed.render(view_rect)
     self._sp_speed_limit.update()
-    self._sp_speed_limit.render(self._content_rect)
-    self._sp_rocket_fuel.render(self._content_rect, ui_state.sm)
+    self._sp_speed_limit.render(view_rect)
+    self._sp_rocket_fuel.render(view_rect, ui_state.sm)
     self._sp_turn_signals.update()
-    self._sp_turn_signals.render(self._content_rect)
+    self._sp_turn_signals.render(view_rect)
     if ui_state.torque_bar:
-      _tq_rect = self._content_rect
+      _tq_rect = view_rect
       if ui_state.developer_ui in (DeveloperUiState.BOTTOM, DeveloperUiState.BOTH):
-        _tq_rect = rl.Rectangle(self._content_rect.x, self._content_rect.y,
-                                self._content_rect.width, self._content_rect.height - get_bottom_dev_ui_offset())
+        _tq_rect = rl.Rectangle(view_rect.x, view_rect.y,
+                                view_rect.width, view_rect.height - get_bottom_dev_ui_offset())
       self._sp_torque_bar.render(_tq_rect)
-    self._sp_developer_ui.render(self._content_rect)
+    self._sp_developer_ui.render(view_rect)
 
     # mapd map panel (v0.7 debug)
     self._map_panel.update(ui_state.sm)
