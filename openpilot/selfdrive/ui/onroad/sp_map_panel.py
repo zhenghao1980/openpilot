@@ -126,6 +126,9 @@ class MapPanel:
     self._ctr_t = None     # 上次渲染时间戳（兼作低通 dt）
     self._gps_anchor = None  # (dlat, dlon) 匹配位置相对外推 GPS 的偏移（低通后）
     self._gps_last = None  # (lat, lon, t_mono, speed, bearing) 最新 GPS 固定解
+    self._gps_pos = None   # [lat, lon] 连续 GPS 轨迹状态（积分 + 固定解软修正）
+    self._gps_pos_t = None # 上次轨迹积分时间戳
+    self._gps_vel = None   # (speed, bearing) 最新固定解速度
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -209,14 +212,32 @@ class MapPanel:
       self._ctr_t = None
       self._gps_anchor = None
       self._gps_last = None
+      self._gps_pos = None
+      self._gps_pos_t = None
+    # GPS 轨迹跟踪器：位置状态连续积分（每帧按最新速度/方位角外推 dt_frame），
+    # 新固定解只做小增益修正（tau=0.8s）。固定解的发布延迟有慢漂移（实测每
+    # ~1.5s 滞后约一帧），若每帧硬重置外推基线，延迟抖动会直接变成画面的
+    # 快慢性交替；连续状态 + 软修正可把该抖动压低两个数量级。
+    dt_frame = min(max(now - (self._gps_pos_t or now), 1e-3), 0.5)
+    if self._gps_pos is not None:
+      g0 = self._gps_last
+      sp, br = self._gps_vel if self._gps_vel is not None else (0.0, 0.0)
+      if g0 is not None and now - g0[2] > 1.0:
+        sp = 0.0   # 固定解久未更新，停止外推避免漂移
+      self._gps_pos[0], self._gps_pos[1] = _dest_point(self._gps_pos[0], self._gps_pos[1], br, sp * dt_frame)
     if gps_ok and sm.updated['gpsLocationExternal']:
+      if self._gps_pos is None:
+        self._gps_pos = [gps.latitude, gps.longitude]
+      else:
+        a = 1.0 - math.exp(-dt_frame / 0.8)
+        self._gps_pos[0] += (gps.latitude - self._gps_pos[0]) * a
+        self._gps_pos[1] += (gps.longitude - self._gps_pos[1]) * a
+      self._gps_vel = (gps.speed, gps.bearingDeg)
       self._gps_last = (gps.latitude, gps.longitude, now, gps.speed, gps.bearingDeg)
-    # 速度外推：把最后 GPS 固定解沿速度/方位角推到当前时刻 → 连续轨迹
-    g = self._gps_last
+    self._gps_pos_t = now
     elat = elon = None
-    if g is not None:
-      dt_g = min(max(now - g[2], 0.0), 0.5)
-      elat, elon = _dest_point(g[0], g[1], g[4], g[3] * dt_g)
+    if self._gps_pos is not None:
+      elat, elon = self._gps_pos[0], self._gps_pos[1]
     elif gps_ok:
       elat, elon = gps.latitude, gps.longitude
     if data_ok and elat is not None:
