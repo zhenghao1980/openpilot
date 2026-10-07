@@ -135,6 +135,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<uint8_t[]> data;
     unsigned w, h;
     uint64_t seq;
+    double cam_lat, cam_lon;    // 本帧实际渲染相机（回显给 UI 对齐投影）
+    float cam_zoom, cam_bearing, cam_pitch;
   };
   std::mutex enc_mtx;
   std::condition_variable enc_cv;
@@ -166,6 +168,11 @@ int main(int argc, char** argv) {
       f.setWidth(job.w);
       f.setHeight(job.h);
       f.setSeq(job.seq);
+      f.setCamLat(job.cam_lat);
+      f.setCamLon(job.cam_lon);
+      f.setCamZoom(job.cam_zoom);
+      f.setCamBearing(job.cam_bearing);
+      f.setCamPitch(job.cam_pitch);
       f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
       pm.send("mapRenderFrame", msg);
       free(enc);
@@ -306,7 +313,9 @@ int main(int argc, char** argv) {
         std::lock_guard<std::mutex> lk(enc_mtx);
         if (enc_q.size() >= 2) enc_q.pop_front();  // 积压时丢旧帧，只保最新
         enc_q.push_back(EncJob{std::move(img.data), (unsigned)img.size.width,
-                               (unsigned)img.size.height, rendered_seq++});
+                               (unsigned)img.size.height, rendered_seq++,
+                               c.getLat(), c.getLon(), c.getZoom(),
+                               c.getBearing(), c.getPitch()});
       }
       enc_cv.notify_one();
     }

@@ -227,4 +227,9 @@ struct MapRenderFrame @0x8b2a5d0c3f1e69072 {
   height @1 :UInt32;
   seq @2 :UInt64;
   img @3 :Data;   # QOI encoded RGBA
+  camLat @4 :Float64;   # 实际渲染相机（回显，供 UI 投影与底图对齐）
+  camLon @5 :Float64;
+  camZoom @6 :Float32;
+  camBearing @7 :Float32;
+  camPitch @8 :Float32;
 }

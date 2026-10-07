@@ -369,6 +369,18 @@ class MapPanel:
     self._mr.send_cam(cam_lat0, cam_lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
     mpp_view = mpp_screen  # 无底图时 overlay/比例尺退化为相机 mpp
     tex = self._mr.frame_texture(sm)
+
+    # ---- 相机回显对齐：底图是 maprenderd 按稍早的相机渲染的（渲染+编码有
+    # 滞后），叠加层投影必须改用帧里回显的实际渲染相机，否则转向时车标与
+    # 底图分离。回显 cam 已含导航提前量，直接替换 cam_lat0/cam_lon0。
+    # live 相机照常 send_cam（maprenderd 继续追踪最新），此处只改投影。
+    echo = getattr(self._mr, "cam_shown", None)
+    if echo is not None and tex is not None and rl.is_texture_valid(tex):
+      cam_lat0, cam_lon0 = echo[0], echo[1]
+      zoom = echo[2]
+      bearing = echo[3]
+      pitch = echo[4]
+      mpp_screen = math.cos(math.radians(cam_lat0)) * 2 * math.pi * EARTH_R / (256 * (2 ** zoom))
     scale, src_x, src_y = 1.0, 0.0, 0.0
     if tex is not None and rl.is_texture_valid(tex):
       w, h = self._mr._tex_size

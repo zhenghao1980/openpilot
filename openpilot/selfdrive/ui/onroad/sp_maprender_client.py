@@ -105,9 +105,12 @@ class MapRenderClient:
     # 解码缓冲池：state 0=FREE 1=READY 2=UPLOADING
     self._buf = [None] * self._N_BUF        # bytearray(w*h*4)
     self._meta = [(0, 0)] * self._N_BUF
+    self._cam_meta = [None] * self._N_BUF   # 每缓冲对应的实际渲染相机回显
     self._state = [0] * self._N_BUF
     self._cond = threading.Condition()
     self._raw = None                        # 待解码的 QOI 字节（只保留最新）
+    self._raw_cam = None                    # 与 _raw 配对的相机回显
+    self.cam_shown = None                   # 当前已上传纹理对应的相机回显
     self._worker = threading.Thread(target=self._decode_loop, daemon=True)
     self._worker.start()
 
@@ -135,6 +138,8 @@ class MapRenderClient:
           self._cond.wait()
         raw = self._raw
         self._raw = None
+        cam = self._raw_cam
+        self._raw_cam = None
         idx = -1
         for i in range(self._N_BUF):
           if self._state[i] == 0:
@@ -151,6 +156,7 @@ class MapRenderClient:
         continue
       with self._cond:
         self._meta[idx] = (w, h)
+        self._cam_meta[idx] = cam
         self._state[idx] = 1  # READY
 
   def _decode(self, raw: bytes, idx: int):
@@ -213,10 +219,13 @@ class MapRenderClient:
     fsm.update(0)
     if fsm.updated["mapRenderFrame"] and fsm.valid["mapRenderFrame"]:
       try:
-        raw = bytes(fsm["mapRenderFrame"].img)
+        fr = fsm["mapRenderFrame"]
+        raw = bytes(fr.img)
+        cam = (fr.camLat, fr.camLon, fr.camZoom, fr.camBearing, fr.camPitch)
         self._last_frame_t = now
         with self._cond:
-          self._raw = raw  # 只保留最新帧，解码跟不上就丢
+          self._raw = raw      # 只保留最新帧，解码跟不上就丢
+          self._raw_cam = cam  # 相机回显与帧字节同生死，避免错配
           self._cond.notify()
       except Exception:
         pass
@@ -251,6 +260,7 @@ class MapRenderClient:
         self._state[idx] = 0
       return self._tex
     with self._cond:
+      self.cam_shown = self._cam_meta[idx]
       self._state[idx] = 0  # FREE
     if tex is not self._tex:
       if self._tex is not None and rl.is_texture_valid(self._tex):
