@@ -349,7 +349,7 @@ class MapPanel:
 
     # 3D pitch: 60° when panel's 2D/3D toggle is active + zoom deep enough.
     # The toggle lives on the map panel itself; default = 2D (top-down).
-    pitch = 60.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
+    pitch = 65.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
 
     # 导航视角（高德/苹果式）：3D heading-up 时相机中心沿航向提前 NAV_AHEAD_M，
     # 车辆投影落在屏幕 ~62% 高度（视野看向远方，而非车钉死在屏幕中心）
@@ -441,8 +441,9 @@ class MapPanel:
         ex, ey = pos if pos is not None else (cx, cy)
         # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
         # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
-        ext = 18.0
-        rl.draw_ellipse(int(ex), int(ey + 5), 58.0, max(dh * 0.46, 8.0), rl.Color(0, 0, 0, 120))
+        # 阴影紧贴图标正下方（勿偏右下/过大，否则图标显得飞高）。
+        ext = 10.0
+        rl.draw_ellipse(int(ex), int(ey + 3), 46.0, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
                             rl.Rectangle(ex - 64, ey - dh / 2 - ext, 128.0, dh),
                             rl.Vector2(64, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
