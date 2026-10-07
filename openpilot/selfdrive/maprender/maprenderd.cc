@@ -15,6 +15,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cxxabi.h>
+#include <execinfo.h>
 #include <cstdio>
 #include <deque>
 #include <fstream>
@@ -258,6 +260,25 @@ int main(int argc, char** argv) {
       } catch (const std::exception& e) {
         fprintf(stderr, "[mr] render threw typeid=%s what=[%s]\n",
                 typeid(e).name(), e.what());
+        void* bt[32];
+        int nbt = backtrace(bt, 32);
+        char** syms = backtrace_symbols(bt, nbt);
+        for (int i = 0; i < nbt && syms; i++) {
+          std::string line(syms[i]);
+          auto lp = line.find(" ("), plus = line.find("+", lp == std::string::npos ? 0 : lp);
+          if (lp != std::string::npos && plus != std::string::npos) {
+            std::string mangled = line.substr(lp + 2, plus - lp - 2);
+            int st = 0;
+            char* dem = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &st);
+            if (st == 0 && dem) {
+              fprintf(stderr, "[bt] %s\n", dem);
+              free(dem);
+              continue;
+            }
+          }
+          fprintf(stderr, "[bt] %s\n", line.c_str());
+        }
+        free(syms);
         return;
       }
 
