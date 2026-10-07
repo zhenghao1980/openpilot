@@ -42,6 +42,8 @@ ICON_SIZE      = 120
 ICON_PAD       = 30
 ICON_PAD_BOTTOM = 90   # 底缘让开底部状态卡/比例尺行（卡高 78px + 12px 间隙）
 _NAV_ICON_CANDIDATES = [
+  os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "icons", "map_nav.png"),
+  "/home/zheng/openpilot/openpilot/selfdrive/assets/icons/map_nav.png",
   os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "icons", "navigation", "launcher_route_light.png"),
   "/home/zheng/openpilot/openpilot/selfdrive/assets/icons/navigation/launcher_route_light.png",
 ]
