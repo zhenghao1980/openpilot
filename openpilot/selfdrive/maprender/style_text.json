@@ -533,11 +533,11 @@
           "stops": [
             [
               10,
-              26
+              13
             ],
             [
               18,
-              34
+              20
             ]
           ]
         },
@@ -547,7 +547,7 @@
       "paint": {
         "text-color": "#d8dce6",
         "text-halo-color": "#101319",
-        "text-halo-width": 1.8
+        "text-halo-width": 1.2
       }
     },
     {
