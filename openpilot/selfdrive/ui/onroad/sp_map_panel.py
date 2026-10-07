@@ -129,6 +129,7 @@ class MapPanel:
     self._gps_pos = None   # [lat, lon] 连续 GPS 轨迹状态（积分 + 固定解软修正）
     self._gps_pos_t = None # 上次轨迹积分时间戳
     self._gps_vel = None   # (speed, bearing) 最新固定解速度
+    self._gps_nfix = 0     # 已处理的固定解计数（初始收敛阶段用大增益）
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -214,6 +215,7 @@ class MapPanel:
       self._gps_last = None
       self._gps_pos = None
       self._gps_pos_t = None
+      self._gps_nfix = 0
     # GPS 轨迹跟踪器：位置状态连续积分（每帧按最新速度/方位角外推 dt_frame），
     # 新固定解只做小增益修正（tau=0.8s）。固定解的发布延迟有慢漂移（实测每
     # ~1.5s 滞后约一帧），若每帧硬重置外推基线，延迟抖动会直接变成画面的
@@ -229,7 +231,10 @@ class MapPanel:
       if self._gps_pos is None:
         self._gps_pos = [gps.latitude, gps.longitude]
       else:
-        a = 1.0 - math.exp(-dt_frame / 0.8)
+        # 初始收敛阶段用大增益：跟踪器从零初始化时需吸收固定解的发布延迟
+        # （约 0.3~0.5s 行程），tau=0.8s 要拖 ~8s，头 12 个解用 0.25 缩短到 ~1s
+        a = 0.25 if self._gps_nfix < 12 else 1.0 - math.exp(-dt_frame / 0.8)
+        self._gps_nfix += 1
         self._gps_pos[0] += (gps.latitude - self._gps_pos[0]) * a
         self._gps_pos[1] += (gps.longitude - self._gps_pos[1]) * a
       self._gps_vel = (gps.speed, gps.bearingDeg)

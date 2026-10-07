@@ -3,6 +3,7 @@ from __future__ import annotations  # pyray.Texture2D is a function at runtime, 
 import ctypes
 import os
 import struct
+import threading
 import time
 
 import pyray as rl
@@ -25,6 +26,11 @@ for _cand in (
       _lib.qoi_decode_rgba.argtypes = [ctypes.c_char_p, ctypes.c_int,
                                        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
                                        ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+      if hasattr(_lib, "qoi_decode_rgba_into"):
+        _lib.qoi_decode_rgba_into.restype = ctypes.c_int
+        _lib.qoi_decode_rgba_into.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                              ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                                              ctypes.c_void_p]
       _qoi_c = _lib
       break
     except OSError:
@@ -77,13 +83,104 @@ def qoi_decode(data: bytes):
 
 
 class MapRenderClient:
-  """Sends camera to maprenderd at ~10Hz; converts latest frame to a texture."""
+  """Sends camera to maprenderd at ~50Hz; converts latest frame to a texture.
+
+  Decode runs on a worker thread (RT UI core 每帧省 ~10ms）；主线程只做
+  GPU 纹理上传。三连缓冲（FREE/READY/UPLOADING）避免读写竞争。"""
+
+  _N_BUF = 3
 
   def __init__(self):
     self._pm = messaging.PubMaster(["mapRenderCam"])
     self._tex: rl.Texture2D | None = None
     self._tex_size = (0, 0)
     self._last_cam_t = 0.0
+    # 解码缓冲池：state 0=FREE 1=READY 2=UPLOADING
+    self._buf = [None] * self._N_BUF        # bytearray(w*h*4)
+    self._meta = [(0, 0)] * self._N_BUF
+    self._state = [0] * self._N_BUF
+    self._cond = threading.Condition()
+    self._raw = None                        # 待解码的 QOI 字节（只保留最新）
+    self._worker = threading.Thread(target=self._decode_loop, daemon=True)
+    self._worker.start()
+
+  @staticmethod
+  def _demote_thread():
+    """解码线程降为普通调度并离开 RT 核心（core 5 归 UI）。"""
+    try:
+      os.sched_setaffinity(0, {4})
+    except Exception:
+      pass
+    try:
+      libc = ctypes.CDLL("libc.so.6")
+
+      class _sp(ctypes.Structure):
+        _fields_ = [("sched_priority", ctypes.c_int)]
+      libc.sched_setscheduler(0, 0, ctypes.byref(_sp(0)))  # SCHED_OTHER
+    except Exception:
+      pass
+
+  def _decode_loop(self):
+    self._demote_thread()
+    while True:
+      with self._cond:
+        while self._raw is None:
+          self._cond.wait()
+        raw = self._raw
+        self._raw = None
+        idx = -1
+        for i in range(self._N_BUF):
+          if self._state[i] == 0:
+            idx = i
+            self._state[i] = 3  # WRITING
+            break
+      if idx < 0:
+        continue  # 缓冲全占（不应发生），丢帧
+      try:
+        w, h, data = self._decode(raw, idx)
+      except Exception:
+        with self._cond:
+          self._state[idx] = 0
+        continue
+      with self._cond:
+        self._meta[idx] = (w, h)
+        self._state[idx] = 1  # READY
+
+  def _decode(self, raw: bytes, idx: int):
+    """解码 QOI 进缓冲 idx，返回 (w, h, 可直接用于 rl.Image 的对象)。"""
+    if _qoi_c is not None:
+      w_i, h_i = ctypes.c_int(0), ctypes.c_int(0)
+      # 先解析尺寸（用 into 变体需要外部缓冲；先走一遍 malloc 版拿尺寸代价大，
+      # 直接从 QOI 头读宽高）
+      if len(raw) >= 14 and raw[:4] == b"qoif":
+        w, h = struct.unpack(">II", raw[4:12])
+      else:
+        raise ValueError("not qoi")
+      need = w * h * 4
+      buf = self._buf[idx]
+      if buf is None or len(buf) < need:
+        buf = bytearray(need)
+        self._buf[idx] = buf
+      if hasattr(_qoi_c, "qoi_decode_rgba_into"):
+        if _qoi_c.qoi_decode_rgba_into(raw, len(raw), ctypes.byref(w_i), ctypes.byref(h_i),
+                                       (ctypes.c_char * need).from_buffer(buf)) != 0:
+          raise ValueError("decode failed")
+      else:
+        w_i, h_i = ctypes.c_int(0), ctypes.c_int(0)
+        out = ctypes.POINTER(ctypes.c_ubyte)()
+        if _qoi_c.qoi_decode_rgba(raw, len(raw), ctypes.byref(w_i), ctypes.byref(h_i),
+                                  ctypes.byref(out)) != 0 or not out:
+          raise ValueError("decode failed")
+        try:
+          buf[:] = ctypes.string_at(out, need)
+        finally:
+          libc = ctypes.CDLL("libc.so.6")
+          libc.free.argtypes = [ctypes.c_void_p]
+          libc.free(ctypes.cast(out, ctypes.c_void_p))
+      return w_i.value, h_i.value, buf
+    w, h, rgba = qoi_decode(raw)
+    self._buf[idx] = bytearray(rgba)
+    return w, h, self._buf[idx]
 
   def send_cam(self, lat, lon, zoom, bearing, width, height, pitch=0.0):
     now = time.monotonic()
@@ -100,34 +197,34 @@ class MapRenderClient:
     self._pm.send("mapRenderCam", msg)
 
   def frame_texture(self, sm) -> rl.Texture2D | None:
-    if not sm.updated["mapRenderFrame"] or not sm.valid["mapRenderFrame"]:
+    if sm.updated["mapRenderFrame"] and sm.valid["mapRenderFrame"]:
+      try:
+        raw = bytes(sm["mapRenderFrame"].img)
+        with self._cond:
+          self._raw = raw  # 只保留最新帧，解码跟不上就丢
+          self._cond.notify()
+      except Exception:
+        pass
+    # 主线程：把最新解好的缓冲上传为纹理
+    idx = -1
+    with self._cond:
+      for i in range(self._N_BUF):
+        if self._state[i] == 1:
+          self._state[i] = 2  # UPLOADING
+          idx = i
+    if idx < 0:
       return self._tex
-    f = sm["mapRenderFrame"]
+    w, h = self._meta[idx]
+    data = self._buf[idx] if self._buf[idx] is not None else b""
     try:
-      raw = bytes(f.img)
-      if _qoi_c is not None:
-        w_i, h_i = ctypes.c_int(0), ctypes.c_int(0)
-        buf = ctypes.POINTER(ctypes.c_ubyte)()
-        if _qoi_c.qoi_decode_rgba(raw, len(raw), ctypes.byref(w_i), ctypes.byref(h_i),
-                                  ctypes.byref(buf)) != 0 or not buf:
-          return self._tex
-        try:
-          rgba = ctypes.string_at(buf, w_i.value * h_i.value * 4)
-        finally:
-          libc = ctypes.CDLL("libc.so.6")
-          libc.free.argtypes = [ctypes.c_void_p]
-          libc.free(ctypes.cast(buf, ctypes.c_void_p))
-        w, h = w_i.value, h_i.value
-      else:
-        w, h, rgba = qoi_decode(raw)
-    except Exception:
-      return self._tex
-    # ADAPT: pyray Image struct construction varies; new pyray takes Image(data, w, h, mipmaps, format)
-    try:
-      img = rl.Image(bytes(rgba), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+      img = rl.Image(bytes(data), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
       tex = rl.load_texture_from_image(img)
     except Exception:
+      with self._cond:
+        self._state[idx] = 0
       return self._tex
+    with self._cond:
+      self._state[idx] = 0  # FREE
     if self._tex is not None and rl.is_texture_valid(self._tex):
       rl.unload_texture(self._tex)
     self._tex = tex

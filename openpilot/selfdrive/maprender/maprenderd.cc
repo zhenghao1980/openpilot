@@ -11,11 +11,16 @@
 //     (SYNCHRONOUS — no observer/cv needed)
 //   - mln::Map(RendererFrontend&, MapObserver&, MapOptions, ResourceOptions, ...)
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <mln/gfx/headless_frontend.hpp>
@@ -113,6 +118,51 @@ int main(int argc, char** argv) {
   PubMaster pm({"mapRenderFrame"});
   printf("[maprenderd] ready (style=%s mbtiles=%s)\n", style_path, mbtiles_path);
 
+  // ---- 编码/发送工作线程：渲染线程只出图，QOI 编码 + msgq 发送在副线程 ----
+  // 渲染 12ms + 编码 10ms 串行时流水线余量很小；分离后渲染线程立刻处理
+  // 下一相机更新，编码耗时不再占用渲染节拍（积压时丢旧帧只保最新）。
+  struct EncJob {
+    std::unique_ptr<uint8_t[]> data;
+    unsigned w, h;
+    uint64_t seq;
+  };
+  std::mutex enc_mtx;
+  std::condition_variable enc_cv;
+  std::deque<EncJob> enc_q;
+  std::atomic<bool> enc_quit{false};
+  std::thread enc_thread([&] {
+    while (true) {
+      EncJob job;
+      {
+        std::unique_lock<std::mutex> lk(enc_mtx);
+        enc_cv.wait(lk, [&] { return enc_quit.load() || !enc_q.empty(); });
+        if (enc_quit.load()) return;
+        job = std::move(enc_q.front());
+        enc_q.pop_front();
+      }
+      int enc_len = 0;
+      qoi_desc qd;
+      qd.width = job.w;
+      qd.height = job.h;
+      qd.channels = 4;
+      qd.colorspace = 0x00;
+      void* enc = qoi_encode(job.data.get(), &qd, &enc_len);
+      if (!enc) {
+        fprintf(stderr, "[mr] qoi_encode FAILED size=%ux%u\n", job.w, job.h);
+        continue;
+      }
+      MessageBuilder msg;
+      auto f = msg.initEvent().initMapRenderFrame();
+      f.setWidth(job.w);
+      f.setHeight(job.h);
+      f.setSeq(job.seq);
+      f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
+      pm.send("mapRenderFrame", msg);
+      free(enc);
+    }
+  });
+  enc_thread.detach();
+
   // RunLoop-driven render loop (mirrors vendor/glfw/glfw_view.cpp::run()):
   //   - stack RunLoop on main thread
   //   - 16ms timer tick -> callback that drains sm.update + jumpTo + render
@@ -207,27 +257,15 @@ int main(int argc, char** argv) {
       static int alpha_warned = 0;
       if (amin < 250 && ++alpha_warned <= 10)
         fprintf(stderr, "[mr] WARN: non-opaque pixel alpha min=%u\n", amin);
-      int enc_len = 0;
-      qoi_desc qd;
-      qd.width = (unsigned int)img.size.width;
-      qd.height = (unsigned int)img.size.height;
-      qd.channels = 4;
-      qd.colorspace = 0x00;
-      void* enc = qoi_encode(img.data.get(), &qd, &enc_len);
-      if (!enc) {
-        fprintf(stderr, "[mr] qoi_encode FAILED size=%ux%u\n",
-                (unsigned)img.size.width, (unsigned)img.size.height);
-        return;
-      }
 
-      MessageBuilder msg;
-      auto f = msg.initEvent().initMapRenderFrame();
-      f.setWidth(img.size.width);
-      f.setHeight(img.size.height);
-      f.setSeq(rendered_seq++);
-      f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
-      pm.send("mapRenderFrame", msg);
-      free(enc);
+      // 交予编码线程：只搬动 unique_ptr，零拷贝
+      {
+        std::lock_guard<std::mutex> lk(enc_mtx);
+        if (enc_q.size() >= 2) enc_q.pop_front();  // 积压时丢旧帧，只保最新
+        enc_q.push_back(EncJob{std::move(img.data), (unsigned)img.size.width,
+                               (unsigned)img.size.height, rendered_seq++});
+      }
+      enc_cv.notify_one();
     }
   };
 
