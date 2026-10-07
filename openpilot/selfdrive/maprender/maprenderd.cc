@@ -10,6 +10,7 @@
 //   - mln::HeadlessFrontend::render(Map&) -> RenderResult{PremultipliedImage,...}
 //     (SYNCHRONOUS — no observer/cv needed)
 //   - mln::Map(RendererFrontend&, MapObserver&, MapOptions, ResourceOptions, ...)
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -58,10 +59,12 @@ std::string loadFile(const char* path) {
 // `mbtiles://<abs path>` so vendor MBTilesFileSource reads china.mbtiles
 // directly. glyphs URL is left untouched (style_no_text.json has none).
 std::string localizeStyle(const std::string& in, const std::string& mbtiles_abs) {
+  // 直接替换占位符子串本身（不依赖 JSON 序列化的空格/引号格式，
+  // 样式文件被任意工具重写后依然有效）
   std::string out = in;
   for (const std::string& alias : {"{openmaptiles}", "openmaptiles", "{osm}", "osm"}) {
-    const std::string from = "\"url\": \"mbtiles://" + alias + "\"";
-    const std::string to = "\"url\": \"mbtiles://" + mbtiles_abs + "\"";
+    const std::string from = "mbtiles://" + alias;
+    const std::string to = "mbtiles://" + mbtiles_abs;
     for (auto pos = out.find(from); pos != std::string::npos; pos = out.find(from))
       out.replace(pos, from.size(), to);
   }
@@ -217,15 +220,19 @@ int main(int argc, char** argv) {
         return;
       }
 
-      // Dynamic render resolution: honor the size requested by the camera,
-      // clamped to 960px per dimension — C3X 实机测量 2048 全分辨率下单帧
-      // render+encode ~90ms CPU，无法维持 20fps；960 与 UI 纹理上采样视觉无差别
+      // Dynamic render resolution: honor the size requested by the camera.
+      // 等比缩放到长边 <= kMaxDim（保持请求宽高比，UI 侧按 cover 裁剪显示
+      // 才不会有拉伸/裁错）；C3X 实机测量 2048 全分辨率单帧 render+encode
+      // ~90ms CPU 无法维持 20fps，1280 是精细度与帧率的平衡点。
       {
         uint32_t reqW = c.getWidth() ? c.getWidth() : W;
         uint32_t reqH = c.getHeight() ? c.getHeight() : H;
-        const uint32_t kMaxDim = 960;
-        if (reqW > kMaxDim) reqW = kMaxDim;
-        if (reqH > kMaxDim) reqH = kMaxDim;
+        const uint32_t kMaxDim = 1280;
+        if (std::max(reqW, reqH) > kMaxDim) {
+          double s = (double)kMaxDim / std::max(reqW, reqH);
+          reqW = (uint32_t)(reqW * s);
+          reqH = (uint32_t)(reqH * s);
+        }
         if (reqW < 64) reqW = 64;
         if (reqH < 64) reqH = 64;
         mln::Size cur = frontend.getSize();

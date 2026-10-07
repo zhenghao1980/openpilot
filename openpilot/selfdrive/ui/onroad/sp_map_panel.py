@@ -93,6 +93,12 @@ def _dest_point(lat, lon, bearing_deg, d_m):
   return math.degrees(la2), math.degrees(lo2)
 
 
+def _cjk_road_name(name: str) -> str:
+  """标题栏只保留中文路名：去掉 ASCII 字母（英文部分/拼音），收尾清理。"""
+  name = "".join(ch for ch in name if not ("a" <= ch <= "z" or "A" <= ch <= "Z"))
+  return name.strip(" \t/·•-—_")
+
+
 class MapPanel:
   def __init__(self):
     self._trail = deque(maxlen=TRAIL_MAX)
@@ -352,16 +358,18 @@ class MapPanel:
       rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
 
     name = out.roadName or out.wayRef
-    self._card(px + 16, py + 14, panel.width - 32, 96)
+    if name:
+      name = _cjk_road_name(name)
+    self._card(px + 16, py + 14, panel.width - 32, 128)
     if data_ok and name:
       # Use the system fallback font (NotoSansCJKsc with full CJK coverage
       # as configured by the user in application.py / po file). Don't load a
       # second atlas — that wastes raylib memory.
       font = font_fallback(self._font_bold if not match_dim else self._font)
       color = TEXT if not match_dim else TEXT_DIM
-      rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 32), 60, 0, color)
+      rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 33), 90, 0, color)
     else:
-      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 38), 48, 0, TEXT_NONE)
+      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 46), 64, 0, TEXT_NONE)
 
     self._card(px + 16, py + panel.height - 78, panel.width - 32, 62)
     if sm.valid['mapdOut']:
@@ -400,8 +408,9 @@ class MapPanel:
     self._draw_zoom_button(minus_cx, btn_cy, "-")
 
     if ui_state.map_orientation == 1:
-      rl.draw_circle(int(px + panel.width - 44), int(py + 142), 16, CARD)
-      rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + panel.width - 50, py + 132), 24, 0, TEXT)
+      # 左上角路名卡加高后移到左侧下方，避开右上角导航图标列
+      rl.draw_circle(int(px + 44), int(py + 170), 16, CARD)
+      rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + 38, py + 160), 24, 0, TEXT)
 
     # nav icon launcher (右下角，与 mode=0 同一位置；mode=2 全屏下也保留以便单击关闭)
     self._draw_nav_icon(rect)
@@ -433,7 +442,7 @@ class MapPanel:
     is_3d = ui_state.map_panel_3d_active
     size = 90 if is_3d else 110
     pad_x = 24
-    pad_y = 132  # 避开 road name card (高 96 + pad 22)
+    pad_y = 166  # 避开 road name card (高 128 + pad 24)
     return rl.Rectangle(px + pw - size - pad_x, py + pad_y, size, size)
 
   def _load_3d_icons(self):
