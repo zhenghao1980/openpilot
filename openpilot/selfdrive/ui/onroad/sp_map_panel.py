@@ -453,14 +453,20 @@ class MapPanel:
         # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
         # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
         # 阴影紧贴图标正下方（勿偏右下/过大，否则图标显得飞高）。
+        # 注意：图标中心已修正为正对地面点，阴影若仍画在地面点会被图标(0.5isz×0.5dh)
+        # 完全盖住；下移 0.32dh、压扁到 0.30dh，让下缘露出图标底约 0.1dh（~8px），
+        # 两侧仍藏在图标内——只露出底部一弯月牙，保持"贴地"观感。
         # 挤出高度按真实世界高度(4m)随缩放换算：固定 10px 在 z16 相当于 18m 高柱。
         ext = max(1.0, min(24.0, 4.0 / max(mpp_view, 1e-3)))
-        rl.draw_ellipse(int(gx), int(gy + isz * 0.023), isz * 0.36, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
+        rl.draw_ellipse(int(gx), int(gy + dh * 0.32), isz * 0.40, max(dh * 0.30, 6.0), rl.Color(0, 0, 0, 100))
+        # 注意 raylib DrawTexturePro 语义：dest.x/y 是旋转轴心落点，最终位置 = dest - origin。
+        # dest 再预减半个图标尺寸会双份补偿，图标中心固定偏左 isz/2、偏上 dh/2（任何比例尺
+        # 都一样），2D 的 draw_texture_ex 无 origin 所以正常。dest 直接给目标中心点即可。
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
-                            rl.Rectangle(ex - isz / 2, ey - dh / 2 - ext, isz, dh),
+                            rl.Rectangle(ex, ey - ext, isz, dh),
                             rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
-                            rl.Rectangle(ex - isz / 2, ey - dh / 2, isz, dh),
+                            rl.Rectangle(ex, ey, isz, dh),
                             rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.WHITE)
       else:
         rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
