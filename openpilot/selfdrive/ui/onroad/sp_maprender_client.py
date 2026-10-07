@@ -1,11 +1,34 @@
 """maprenderd client: camera publisher + frame consumer (cereal mapRender*)."""
 from __future__ import annotations  # pyray.Texture2D is a function at runtime, not a type
+import ctypes
+import os
 import struct
 import time
 
 import pyray as rl
 
 from openpilot.cereal import messaging
+
+# Fast path: dlopen the C QOI decoder (openpilot/selfdrive/maprender/qoi_dec.c)
+# when a prebuilt libqoi_dec.so is present. Pure-Python decoder below is the
+# portable fallback (~1s per 1800x1020 frame — too slow on device).
+_qoi_c = None
+for _cand in (
+    os.environ.get("QOI_DEC_LIB", ""),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "maprender", "libqoi_dec.so"),
+):
+  if _cand and os.path.isfile(_cand):
+    try:
+      _lib = ctypes.CDLL(_cand)
+      _lib.qoi_decode_rgba.restype = ctypes.c_int
+      _lib.qoi_decode_rgba.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                                       ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+      _qoi_c = _lib
+      break
+    except OSError:
+      pass
 
 
 def qoi_decode(data: bytes):
@@ -79,7 +102,22 @@ class MapRenderClient:
       return self._tex
     f = sm["mapRenderFrame"]
     try:
-      w, h, rgba = qoi_decode(bytes(f.img))
+      raw = bytes(f.img)
+      if _qoi_c is not None:
+        w_i, h_i = ctypes.c_int(0), ctypes.c_int(0)
+        buf = ctypes.POINTER(ctypes.c_ubyte)()
+        if _qoi_c.qoi_decode_rgba(raw, len(raw), ctypes.byref(w_i), ctypes.byref(h_i),
+                                  ctypes.byref(buf)) != 0 or not buf:
+          return self._tex
+        try:
+          rgba = ctypes.string_at(buf, w_i.value * h_i.value * 4)
+        finally:
+          libc = ctypes.CDLL("libc.so.6")
+          libc.free.argtypes = [ctypes.c_void_p]
+          libc.free(ctypes.cast(buf, ctypes.c_void_p))
+        w, h = w_i.value, h_i.value
+      else:
+        w, h, rgba = qoi_decode(raw)
     except Exception:
       return self._tex
     # ADAPT: pyray Image struct construction varies; new pyray takes Image(data, w, h, mipmaps, format)
