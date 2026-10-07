@@ -122,10 +122,13 @@ class SpeedLimitRenderer:
     rl.draw_circle_v(center, radius, white)
     rl.draw_ring(center, radius * 0.78, radius, 0, 360, 36, red)
 
-    # 字固定黑色、放大一号（is_overspeed 不再改色，保持用户要求的可读性）
+    # 字固定黑色、放大加粗（is_overspeed 不再改色，保持用户要求的可读性）。
+    # 字体最重只有 Inter-Bold，加粗用 5 次叠印（正中 + 上下左右 1.5px）实现。
     text_color = rl.BLACK
-    font_size = int(radius * (0.72 if len(val) >= 3 else 0.90))
-    self._draw_text_centered(self._font_bold, val, font_size, center, text_color)
+    font_size = int(radius * (0.80 if len(val) >= 3 else 1.00))
+    for dx, dy in ((0, 0), (-1.5, 0), (1.5, 0), (0, -1.5), (0, 1.5)):
+      self._draw_text_centered(self._font_bold, val, font_size,
+                               rl.Vector2(center.x + dx, center.y + dy), text_color)
 
   def _render_mutcd(self, rect: rl.Rectangle, val: str, is_overspeed: bool) -> None:
     rl.draw_rectangle_rounded(rect, 0.18, 10, rl.WHITE)
