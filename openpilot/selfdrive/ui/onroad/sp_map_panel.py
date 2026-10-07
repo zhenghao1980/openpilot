@@ -17,6 +17,7 @@ import time
 import pyray as rl
 
 from openpilot.system.ui.lib.application import gui_app, FontWeight, font_fallback
+from openpilot.selfdrive.ui import UI_BORDER_SIZE
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.onroad.sp_map_tiles import EARTH_R
 from openpilot.selfdrive.ui.onroad.sp_maprender_client import MapRenderClient
@@ -39,8 +40,8 @@ SCALE_BAR_TARGET_PX = 120.0  # 比例尺目标像素长度：1-2-5 序列取不�
 _SCALE_STEPS = (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000)
 CENTER_FRAC    = 0.5   # 与 maprenderd 视口中心一致（对齐关键点）
 ICON_SIZE      = 160
-ICON_PAD       = 30
-ICON_PAD_BOTTOM = 90   # 底缘让开底部状态卡/比例尺行（卡高 78px + 12px 间隙）
+# 圆心偏移：与左下角司机监控图标（driver_state.BTN_SIZE=192）严格对称
+NAV_CENTER_OFF = UI_BORDER_SIZE + 192 // 2
 _NAV_ICON_CANDIDATES = [
   os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "icons", "map_nav.png"),
   "/home/zheng/openpilot/openpilot/selfdrive/assets/icons/map_nav.png",
@@ -494,10 +495,10 @@ class MapPanel:
     # 模仿 exp_button.py: 圆形黑色背景 + 白色图标
     if self._nav_tex is None:
       return
-    # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 openpilot exp button border_size 一致)
+    # 圆心与左下角司机监控图标严格对称（同一边距、同一高度）
     r = ICON_SIZE // 2 + 10
-    cx = int(rect.x + rect.width - ICON_PAD - r)
-    cy = int(rect.y + rect.height - ICON_PAD_BOTTOM - r)
+    cx = int(rect.x + rect.width - NAV_CENTER_OFF)
+    cy = int(rect.y + rect.height - NAV_CENTER_OFF)
     rl.draw_circle(cx, cy, r, rl.Color(0, 0, 0, 166))
     rl.draw_texture_ex(self._nav_tex, rl.Vector2(cx - self._nav_tex.width / 2, cy - self._nav_tex.height / 2),
                        0.0, 1.0, rl.Color(255, 255, 255, 255))
@@ -551,8 +552,8 @@ class MapPanel:
     if mode != 0:
       return rx <= x <= rx + rw and ry <= y <= ry + rh
     r = ICON_SIZE // 2 + 10
-    cx = rx + rw - ICON_PAD - r
-    cy = ry + rh - ICON_PAD_BOTTOM - r
+    cx = rx + rw - NAV_CENTER_OFF
+    cy = ry + rh - NAV_CENTER_OFF
     return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
 
   def handle_tap(self, x: float, y: float) -> None:
@@ -560,10 +561,10 @@ class MapPanel:
     if not ui_state.started or not ui_state.off_line_map_panel:
       return
     rect_x, rect_y, rect_w, rect_h = self._last_content_rect
-    # 圆心 = 让圆右边距屏幕右边 = ICON_PAD (跟 _draw_nav_icon 一致)
+    # 圆心跟 _draw_nav_icon 一致：与左下司机监控图标对称
     r = ICON_SIZE // 2 + 10
-    cx = rect_x + rect_w - ICON_PAD - r
-    cy = rect_y + rect_h - ICON_PAD_BOTTOM - r
+    cx = rect_x + rect_w - NAV_CENTER_OFF
+    cy = rect_y + rect_h - NAV_CENTER_OFF
     dx = x - cx
     dy = y - cy
     in_icon = (dx*dx + dy*dy) <= r*r
