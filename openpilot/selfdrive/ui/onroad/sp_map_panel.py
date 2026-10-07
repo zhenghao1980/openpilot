@@ -342,26 +342,26 @@ class MapPanel:
     if not hasattr(self, '_ego_loaded'):
       self._ego_loaded = True
       try:
-        self._tex_ego = gui_app.texture("icons/ego_circle_A.png", 64, 64)
+        self._tex_ego = gui_app.texture("icons/ego_circle_A.png", 128, 128)
       except Exception as _e:
         print(f"[sp_map_panel] ego icon load fail: {_e}", flush=True)
         self._tex_ego = None
     rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
     if getattr(self, '_tex_ego', None) is not None:
-      half = 32
+      half = 64
       rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
 
     name = out.roadName or out.wayRef
-    self._card(px + 16, py + 14, panel.width - 32, 64)
+    self._card(px + 16, py + 14, panel.width - 32, 96)
     if data_ok and name:
       # Use the system fallback font (NotoSansCJKsc with full CJK coverage
       # as configured by the user in application.py / po file). Don't load a
       # second atlas — that wastes raylib memory.
       font = font_fallback(self._font_bold if not match_dim else self._font)
       color = TEXT if not match_dim else TEXT_DIM
-      rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 30), 34, 0, color)
+      rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 32), 60, 0, color)
     else:
-      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 32), 28, 0, TEXT_NONE)
+      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 38), 48, 0, TEXT_NONE)
 
     self._card(px + 16, py + panel.height - 78, panel.width - 32, 62)
     if sm.valid['mapdOut']:
@@ -400,8 +400,8 @@ class MapPanel:
     self._draw_zoom_button(minus_cx, btn_cy, "-")
 
     if ui_state.map_orientation == 1:
-      rl.draw_circle(int(px + panel.width - 44), int(py + 104), 16, CARD)
-      rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + panel.width - 50, py + 94), 24, 0, TEXT)
+      rl.draw_circle(int(px + panel.width - 44), int(py + 142), 16, CARD)
+      rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + panel.width - 50, py + 132), 24, 0, TEXT)
 
     # nav icon launcher (右下角，与 mode=0 同一位置；mode=2 全屏下也保留以便单击关闭)
     self._draw_nav_icon(rect)
@@ -433,7 +433,7 @@ class MapPanel:
     is_3d = ui_state.map_panel_3d_active
     size = 90 if is_3d else 110
     pad_x = 24
-    pad_y = 100  # 避开 road name card (高 64 + pad 18)
+    pad_y = 132  # 避开 road name card (高 96 + pad 22)
     return rl.Rectangle(px + pw - size - pad_x, py + pad_y, size, size)
 
   def _load_3d_icons(self):
