@@ -193,15 +193,27 @@ class MapPanel:
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
 
-    raylib 输入在 UI 进程全局有效，C3X 触摸即鼠标事件；is_mouse_button_pressed
-    为帧级沿触发，每帧最多一次。命中与否由 handle_tap 内 hit_test 决定。
-    rl.get_mouse_position() 返回 raylib logical 坐标，与绘制坐标系一致。
-    注意: nav icon 点击需要在 mode=0 时也能命中 (toggle 0->1)，所以只在 panel 隐藏时跳过。"""
+    C3X 触摸极快（按下+抬起常 <50ms）：若整个点击落在两帧 PollInputEvents 之间，
+    is_mouse_button_pressed 的帧级状态比对会漏掉（press/release 同帧抵消）。
+    因此同时采 raylib 手势系统的 GESTURE_TAP——它逐事件处理队列，短点击也能捕获。
+    两路都触发时按时间+距离去重，避免一次点击切两档。"""
     if not ui_state.started or not ui_state.off_line_map_panel:
       return
+    now = time.monotonic()
+    tx = ty = None
     if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
       m = rl.get_mouse_position()
-      self.handle_tap(m.x, m.y)
+      tx, ty = m.x, m.y
+    if tx is None and rl.is_gesture_detected(rl.GESTURE_TAP):
+      p = rl.get_touch_position(0)
+      tx, ty = p.x, p.y
+    if tx is None:
+      return
+    lt = getattr(self, '_last_tap_handle', None)
+    if lt is not None and now - lt[0] < 0.3 and abs(tx - lt[1]) < 40 and abs(ty - lt[2]) < 40:
+      return
+    self._last_tap_handle = (now, tx, ty)
+    self.handle_tap(tx, ty)
 
   def update(self, sm) -> None:
     self._poll_taps()
