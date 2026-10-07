@@ -11,6 +11,7 @@
 //     (SYNCHRONOUS — no observer/cv needed)
 //   - mln::Map(RendererFrontend&, MapObserver&, MapOptions, ResourceOptions, ...)
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -114,7 +115,11 @@ int main(int argc, char** argv) {
   map.getStyle().loadJSON(style);
   fprintf(stderr, "[mr] style loaded OK size=%zuB\n", style.size());
 
-  SubMaster sm({"mapRenderCam"});
+  // unique_ptr: msgq socket 有重建竞态（后连者 unlink 重建，先连者落在被删
+  // 的旧 socket 上收不到消息），长时间收不到相机更新时重建 SubMaster 自愈
+  auto sm = std::make_unique<SubMaster>(std::vector<const char*>{"mapRenderCam"});
+  auto last_cam_tp = std::chrono::steady_clock::now();
+  bool ever_got_cam = false;
   PubMaster pm({"mapRenderFrame"});
   printf("[maprenderd] ready (style=%s mbtiles=%s)\n", style_path, mbtiles_path);
 
@@ -186,9 +191,19 @@ int main(int argc, char** argv) {
       ~ClearFlag() { f.clear(); }
     } clear_flag{in_callback};
 
-    sm.update(0);  // non-blocking
-    if (sm.updated("mapRenderCam")) {
-      auto c = sm["mapRenderCam"].getMapRenderCam();
+    sm->update(0);  // non-blocking
+    // 断线自愈：曾收到过相机更新但停滞 >2s → 重建 SubMaster 重挂 socket
+    if (sm->updated("mapRenderCam")) {
+      ever_got_cam = true;
+      last_cam_tp = std::chrono::steady_clock::now();
+    } else if (ever_got_cam &&
+               std::chrono::steady_clock::now() - last_cam_tp > std::chrono::seconds(2)) {
+      sm = std::make_unique<SubMaster>(std::vector<const char*>{"mapRenderCam"});
+      last_cam_tp = std::chrono::steady_clock::now();
+      return;
+    }
+    if (sm->updated("mapRenderCam")) {
+      auto c = sm->operator[]("mapRenderCam").getMapRenderCam();
       static int dbg_cam = 0;
       if (++dbg_cam <= 5 || dbg_cam % 100 == 0)
         fprintf(stderr, "[dbg] cam#%d (%.5f,%.5f) z%.2f b%.0f req=%ux%u\n",

@@ -95,6 +95,13 @@ class MapRenderClient:
     self._tex: rl.Texture2D | None = None
     self._tex_size = (0, 0)
     self._last_cam_t = 0.0
+    # 帧订阅独立挂载：msgq socket 有重建竞态（后连者会 unlink 重建，先连者
+    # 落在被删的旧 socket 上），ui_state.sm 可能因此永远收不到帧；用自己的
+    # SubMaster 并在停滞时自动重挂到当前 socket
+    self._fsm = None           # SubMaster(["mapRenderFrame"])
+    self._fsm_born = 0.0       # _fsm 创建时间
+    self._cam_active_t = 0.0   # 上次 send_cam 时间（面板活跃标志）
+    self._last_frame_t = 0.0   # 上次收到帧的时间
     # 解码缓冲池：state 0=FREE 1=READY 2=UPLOADING
     self._buf = [None] * self._N_BUF        # bytearray(w*h*4)
     self._meta = [(0, 0)] * self._N_BUF
@@ -189,6 +196,7 @@ class MapRenderClient:
     if now - self._last_cam_t < 0.02:
       return
     self._last_cam_t = now
+    self._cam_active_t = now
     msg = messaging.new_message("mapRenderCam")
     c = msg.mapRenderCam
     c.lat, c.lon, c.zoom, c.bearing = lat, lon, zoom, bearing
@@ -197,14 +205,27 @@ class MapRenderClient:
     self._pm.send("mapRenderCam", msg)
 
   def frame_texture(self, sm) -> rl.Texture2D | None:
-    if sm.updated["mapRenderFrame"] and sm.valid["mapRenderFrame"]:
+    now = time.monotonic()
+    if self._fsm is None:
+      self._fsm = messaging.SubMaster(["mapRenderFrame"])
+      self._fsm_born = now
+    fsm = self._fsm
+    fsm.update(0)
+    if fsm.updated["mapRenderFrame"] and fsm.valid["mapRenderFrame"]:
       try:
-        raw = bytes(sm["mapRenderFrame"].img)
+        raw = bytes(fsm["mapRenderFrame"].img)
+        self._last_frame_t = now
         with self._cond:
           self._raw = raw  # 只保留最新帧，解码跟不上就丢
           self._cond.notify()
       except Exception:
         pass
+    # 停滞自愈：面板在发相机却 1.5s 收不到帧 → socket 落在旧实例上，
+    # 重建 SubMaster 重新挂载（限频 3s 避免抖动）
+    if (self._cam_active_t > 0.0 and now - self._cam_active_t < 1.0
+        and (self._last_frame_t == 0.0 or now - self._last_frame_t > 1.5)
+        and now - self._fsm_born > 3.0):
+      self._fsm = None
     # 主线程：把最新解好的缓冲上传为纹理
     idx = -1
     with self._cond:
