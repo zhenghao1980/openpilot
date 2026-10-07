@@ -103,10 +103,14 @@ class MapPanel:
     self._zoom_plus_rect = None
     self._zoom_minus_rect = None
     self._last_zoom_btn_t = 0.0   # 防抖：WSLg/XTEST 可能产生幻影点击，限制缩放按钮触发频率
-    # 中心点平滑：mapdExtendedOut.position 仅 1Hz 刷新，直接跟随会每秒跳变一次。
-    # 指数平滑在渲染帧率下渐变逼近目标（tau ≈ 0.35s，稳定滞后约 v*tau 米）
-    self._ctr = None       # [lat, lon] 平滑后的中心
+    # 中心点：GPS 航位推算 + 1Hz 匹配位置修正（消快慢性交替）
+    # mapdExtendedOut.position 仅 1Hz 刷新，直接跟随会每秒跳变一次；
+    # 纯指数平滑会 1Hz 锯齿（先快追再慢收尾）。改用 10Hz GPS 连续推进：
+    # 每次匹配位置刷新时记录 gps→matched 的偏移锚点，平时中心=GPS+锚点。
+    # GPS 不可用时退化为指数平滑（tau ≈ 0.35s）
+    self._ctr = None       # [lat, lon] 平滑后的中心（降级路径用）
     self._ctr_t = None     # 上次平滑时间戳
+    self._gps_anchor = None  # (dlat, dlon) 匹配位置相对 GPS 的偏移
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -183,20 +187,31 @@ class MapPanel:
     data_ok = sm.valid['mapdExtendedOut'] and len(ext.path) >= 2 and match_ok and tile_ok
 
     tlat, tlon = ext.position.latitude, ext.position.longitude
+    gps_ok = sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0
     if not (sm.valid['mapdExtendedOut'] and data_ok):
       self._ctr = None
       self._ctr_t = None
-    if self._ctr is None or self._ctr_t is None:
+      self._gps_anchor = None
+    elif sm.updated['mapdExtendedOut'] and gps_ok:
+      # 1Hz 锚点刷新：记录当前 GPS 与匹配位置的偏移（含地图匹配修正量）
+      self._gps_anchor = (tlat - gps.latitude, tlon - gps.longitude)
+    if self._gps_anchor is not None and gps_ok:
+      # 10Hz GPS 连续推进 + 偏移修正 → 无 1Hz 跳变、无快慢性交替
+      lat0 = gps.latitude + self._gps_anchor[0]
+      lon0 = gps.longitude + self._gps_anchor[1]
+    elif self._ctr is None or self._ctr_t is None:
       self._ctr = [tlat, tlon]
       self._ctr_t = time.monotonic()
+      lat0, lon0 = self._ctr
     else:
+      # GPS 不可用：退化为指数平滑
       now = time.monotonic()
       dt = max(now - self._ctr_t, 1e-3)
       self._ctr_t = now
       a = 1.0 - math.exp(-dt / 0.35)
       self._ctr[0] += (tlat - self._ctr[0]) * a
       self._ctr[1] += (tlon - self._ctr[1]) * a
-    lat0, lon0 = self._ctr
+      lat0, lon0 = self._ctr
     v_ego = sm['carState'].vEgo
     view_m = min(max(v_ego * VIEW_SECS, VIEW_MIN_M), VIEW_MAX_M)
     mpp_screen = view_m / panel.height
