@@ -238,16 +238,23 @@ class MapRenderClient:
     w, h = self._meta[idx]
     data = self._buf[idx] if self._buf[idx] is not None else b""
     try:
-      img = rl.Image(bytes(data), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
-      tex = rl.load_texture_from_image(img)
+      if (self._tex is not None and rl.is_texture_valid(self._tex)
+          and self._tex_size == (w, h)):
+        # 同尺寸帧直接原位更新 GPU 显存，省每帧 ~3MB 纹理新建/销毁
+        rl.update_texture(self._tex, bytes(data))
+        tex = self._tex
+      else:
+        img = rl.Image(bytes(data), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+        tex = rl.load_texture_from_image(img)
     except Exception:
       with self._cond:
         self._state[idx] = 0
       return self._tex
     with self._cond:
       self._state[idx] = 0  # FREE
-    if self._tex is not None and rl.is_texture_valid(self._tex):
-      rl.unload_texture(self._tex)
-    self._tex = tex
+    if tex is not self._tex:
+      if self._tex is not None and rl.is_texture_valid(self._tex):
+        rl.unload_texture(self._tex)
+      self._tex = tex
     self._tex_size = (w, h)
     return tex

@@ -88,7 +88,6 @@ def _cjk_road_name(name: str) -> str:
 
 
 BEAR_TURN_RATE = 110.0  # 视图方位角最大转速 °/s：转向时底图渐进旋转而非瞬切
-NAV_AHEAD_M    = 120.0  # 3D 导航视角：相机中心沿航向提前量，车辆落在屏幕 ~62% 高度
 
 
 def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H, alt_m=0.0):
@@ -334,7 +333,7 @@ class MapPanel:
     view_m = min(max(v_ego * VIEW_SECS, VIEW_MIN_M), VIEW_MAX_M)
     mpp_screen = view_m / panel.height
     zoom = math.log2(math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * mpp_screen))
-    zoom = min(zoom, 16.0)   # 性能封顶：z14 数据 + llvmpipe，z19 静止视图无意义且过重
+    zoom = min(zoom, 16.0)   # 性能封顶：z14 矢量数据，z19 静止视图无意义且过重
     # 手动缩放（+/- 按钮）：bias 叠加后 clamp；overlay 投影与比例尺必须用最终 zoom
     # 反推 mpp_screen，否则底图（按 zoom 渲染）与矢量叠加（按 mpp 投影）错位
     zoom = min(max(zoom + self._zoom_bias, ZOOM_MIN), ZOOM_MANUAL_MAX)
@@ -361,7 +360,7 @@ class MapPanel:
       # 注意单位：_project3d 的世界坐标系是 512*2^z（标准瓦片 256 的 2 倍），
       # 1 世界px 的地面米数 = mpp_screen/2；直接用 mpp_screen 会把提前量放大
       # 2 倍，全屏/缩小一档时车标被推出屏幕底缘（看不到图标）。
-      # 注意高度：maprenderd 帧宽有 1280 上限（llvmpipe 性能保护），全屏时
+      # 注意高度：maprenderd 帧宽有 1280 上限（C3X 实机测量 2048 无法维持 20fps，全屏时
       # 帧高(621) ≠ 面板高(1020)，H 必须用实际帧高，否则车标落到 ~82% 甚至出屏。
       frame_h = self._mr._tex_size[1] or panel.height
       cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, r * frame_h * mpp_screen * 0.5)
