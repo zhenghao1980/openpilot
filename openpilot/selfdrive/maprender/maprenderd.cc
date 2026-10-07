@@ -152,12 +152,13 @@ int main(int argc, char** argv) {
         return;
       }
 
-      // Dynamic render resolution: honor the size requested by the camera
-      // (UI supersamples at 2x for sharper text). Clamp to sane bounds.
+      // Dynamic render resolution: honor the size requested by the camera,
+      // clamped to 960px per dimension — C3X 实机测量 2048 全分辨率下单帧
+      // render+encode ~90ms CPU，无法维持 20fps；960 与 UI 纹理上采样视觉无差别
       {
         uint32_t reqW = c.getWidth() ? c.getWidth() : W;
         uint32_t reqH = c.getHeight() ? c.getHeight() : H;
-        const uint32_t kMaxDim = 2048;
+        const uint32_t kMaxDim = 960;
         if (reqW > kMaxDim) reqW = kMaxDim;
         if (reqH > kMaxDim) reqH = kMaxDim;
         if (reqW < 64) reqW = 64;
@@ -176,59 +177,48 @@ int main(int argc, char** argv) {
                      .withBearing(c.getBearing())
                      .withPitch(c.getPitch()));
 
-      static int dbg_render = 0;
-      int render_id = ++dbg_render;
-      fprintf(stderr, "[mr] render#%d starting fully=%d\n",
-              render_id, (int)map.isFullyLoaded());
       mln::HeadlessFrontend::RenderResult res;
       try {
         for (int i = 0; i < 3 && !map.isFullyLoaded(); i++) {
-          fprintf(stderr, "[mr] render#%d warmup pass %d\n", render_id, i);
           res = frontend.render(map);
         }
         res = frontend.render(map);
-        fprintf(stderr, "[mr] render#%d returned img.data=%p size=%ux%u valid=%d\n",
-                render_id, (void*)res.image.data.get(),
-                res.image.size.width, res.image.size.height,
-                (int)res.image.valid());
       } catch (const std::exception& e) {
-        fprintf(stderr, "[mr] render#%d threw typeid=%s what=[%s]\n",
-                render_id, typeid(e).name(), e.what());
+        fprintf(stderr, "[mr] render threw typeid=%s what=[%s]\n",
+                typeid(e).name(), e.what());
         return;
       }
 
       auto& img = res.image;
       if (!img.data.get() || img.size.isEmpty()) {
-        fprintf(stderr, "[mr] render#%d skip frame: data=%p size.isEmpty=%d\n",
-                render_id, (void*)img.data.get(), (int)img.size.isEmpty());
+        fprintf(stderr, "[mr] skip frame: data=%p size.isEmpty=%d\n",
+                (void*)img.data.get(), (int)img.size.isEmpty());
         return;
       }
 
+      // 地图底图完全不透明：预乘 alpha == 直通 alpha，渲染缓冲可直接编码，
+      // 省掉逐像素反预乘转换 + 8MB 拷贝（全分辨率下约 48ms CPU/帧）
       const size_t n = (size_t)img.size.width * img.size.height;
-      std::vector<uint8_t> rgba(n * 4);
+      uint8_t amin = 255;
       for (size_t i = 0; i < n; i++) {
-        const uint8_t* p = img.data.get() + i * 4;
-        const uint8_t a = p[3];
-        rgba[i*4+0] = a ? (uint8_t)(p[0] * 255 / a) : 0;
-        rgba[i*4+1] = a ? (uint8_t)(p[1] * 255 / a) : 0;
-        rgba[i*4+2] = a ? (uint8_t)(p[2] * 255 / a) : 0;
-        rgba[i*4+3] = a;
+        const uint8_t a = img.data.get()[i * 4 + 3];
+        if (a < amin) amin = a;
       }
+      static int alpha_warned = 0;
+      if (amin < 250 && ++alpha_warned <= 10)
+        fprintf(stderr, "[mr] WARN: non-opaque pixel alpha min=%u\n", amin);
       int enc_len = 0;
       qoi_desc qd;
       qd.width = (unsigned int)img.size.width;
       qd.height = (unsigned int)img.size.height;
       qd.channels = 4;
       qd.colorspace = 0x00;
-      void* enc = qoi_encode(rgba.data(), &qd, &enc_len);
+      void* enc = qoi_encode(img.data.get(), &qd, &enc_len);
       if (!enc) {
-        fprintf(stderr, "[mr] render#%d qoi_encode FAILED size=%ux%u rgba_b=%p\n",
-                render_id, (unsigned)img.size.width, (unsigned)img.size.height,
-                (void*)rgba.data());
+        fprintf(stderr, "[mr] qoi_encode FAILED size=%ux%u\n",
+                (unsigned)img.size.width, (unsigned)img.size.height);
         return;
       }
-      fprintf(stderr, "[mr] render#%d qoi_encode OK size=%ux%u qoi=%dB\n",
-              render_id, (unsigned)img.size.width, (unsigned)img.size.height, enc_len);
 
       MessageBuilder msg;
       auto f = msg.initEvent().initMapRenderFrame();
@@ -237,8 +227,6 @@ int main(int argc, char** argv) {
       f.setSeq(rendered_seq++);
       f.setImg(kj::ArrayPtr<const uint8_t>((const uint8_t*)enc, enc_len));
       pm.send("mapRenderFrame", msg);
-      fprintf(stderr, "[mr] render#%d SENT seq=%llu qoi=%dB\n",
-              render_id, (unsigned long long)(rendered_seq - 1), enc_len);
       free(enc);
     }
   };

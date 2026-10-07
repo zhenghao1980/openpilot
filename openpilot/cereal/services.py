@@ -99,8 +99,8 @@ _services: dict[str, tuple] = {
   "mapdExtendedOut": (True, 1., 1),
   "mapdIn": (False, 0.),
   "sccXState": (True, 20., 10),
-  "mapRenderCam": (True, 10., 1),
-  "mapRenderFrame": (True, 15., None, QueueSize.BIG),
+  "mapRenderCam": (False, 10., 1),
+  "mapRenderFrame": (False, 15., None, QueueSize.BIG),
 }
 SERVICE_LIST = {name: Service(*vals) for
                 idx, (name, vals) in enumerate(_services.items())}
