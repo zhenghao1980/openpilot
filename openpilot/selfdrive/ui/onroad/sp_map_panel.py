@@ -425,8 +425,9 @@ class MapPanel:
         icon_rot = ego_brg if ui_state.map_orientation == 1 else (ego_brg - bearing) % 360.0
         # 图标尺寸随缩放换算：z16（100m 档，约 1.8m/px）固定 128px 相当于 234m 长的
         # 巨毯盖在城市上空——这才是“漂浮在天空”的主因（挤出高度 10px 只是次要）。
-        # 按 44m 世界长度换算并限制在 52~128px：远看是贴地小车标，近看仍饱满。
-        isz = max(52.0, min(128.0, 44.0 / max(mpp_view, 1e-3)))
+        # 按 44m 世界长度换算。下限 96px = 20m 档（z18）的自然尺寸：50m 及更粗的
+        # 比例保持该大小（用户要求），只有放大到 20m 以内才继续长到 128px。
+        isz = max(96.0, min(128.0, 44.0 / max(mpp_view, 1e-3)))
         dh = isz * math.cos(math.radians(pitch))
         pos = to_screen(lat0, lon0)
         ex, ey = pos if pos is not None else (cx, cy)
