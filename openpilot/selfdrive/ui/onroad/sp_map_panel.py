@@ -23,9 +23,6 @@ from openpilot.selfdrive.ui.onroad.sp_maprender_client import MapRenderClient
 
 BG        = rl.Color(16, 20, 28, 255)
 DIVIDER   = rl.Color(38, 44, 54, 255)
-ROUTE_CAS = rl.Color(10, 13, 18, 255)
-ROUTE_GLO = rl.Color(46, 140, 255, 60)
-ROUTE     = rl.Color(46, 140, 255, 255)
 ARROW     = rl.WHITE
 ARROW_RING= rl.Color(15, 19, 25, 210)
 CARD      = rl.Color(24, 29, 37, 235)
@@ -397,14 +394,7 @@ class MapPanel:
       sy = dx * math.sin(b) + dy * math.cos(b)
       return cx + sx / mpp_view, cy - sy / mpp_view
 
-    if data_ok:
-      pts = [p for p in (to_screen(p.latitude, p.longitude) for p in ext.path) if p is not None]
-      if len(pts) >= 2:
-        alpha = 150 if match_dim else 255
-        self._stroke(pts, ROUTE_CAS, 12.0, ROUTE_CAS, 9.0)
-        self._stroke(pts, ROUTE_CAS, 8.0, rl.Color(ROUTE_GLO.r, ROUTE_GLO.g, ROUTE_GLO.b, 110 if not match_dim else 60), 7.0)
-        self._stroke(pts, rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5,
-                     rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5)
+    # 预测路径蓝线已移除（用户要求不显示）
 
     # ---- 自车图标：蓝色圆形带白色向上箭头 (ego_circle_A.png) ----
     if not hasattr(self, '_ego_loaded'):
