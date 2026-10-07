@@ -112,7 +112,7 @@ procs = [
   PythonProcess("lateral_maneuversd", "openpilot.tools.lateral_maneuvers.lateral_maneuversd", lat_maneuver),
   PythonProcess("radard", "openpilot.selfdrive.controls.radard", only_onroad),
   NativeProcess("mapd", "openpilot/selfdrive/mapd", ["./mapd"], only_onroad),
-  NativeProcess("maprenderd", "openpilot/selfdrive/maprender", ["./maprenderd"], only_onroad),
+  NativeProcess("maprenderd", "openpilot/selfdrive/maprender", ["./maprenderd", "/data/mapd_render/style_text.json"], only_onroad),
   PythonProcess("hardwared", "openpilot.system.hardware.hardwared", always_run),
   PythonProcess("modem", "openpilot.common.hardware.comma.modem", always_run, enabled=COMMA_HARDWARE),
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),

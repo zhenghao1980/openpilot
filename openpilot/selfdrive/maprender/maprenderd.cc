@@ -152,6 +152,24 @@ int main(int argc, char** argv) {
         return;
       }
 
+      // Dynamic render resolution: honor the size requested by the camera
+      // (UI supersamples at 2x for sharper text). Clamp to sane bounds.
+      {
+        uint32_t reqW = c.getWidth() ? c.getWidth() : W;
+        uint32_t reqH = c.getHeight() ? c.getHeight() : H;
+        const uint32_t kMaxDim = 2048;
+        if (reqW > kMaxDim) reqW = kMaxDim;
+        if (reqH > kMaxDim) reqH = kMaxDim;
+        if (reqW < 64) reqW = 64;
+        if (reqH < 64) reqH = 64;
+        mln::Size cur = frontend.getSize();
+        if (cur.width != reqW || cur.height != reqH) {
+          frontend.setSize({reqW, reqH});
+          map.setSize({reqW, reqH});
+          fprintf(stderr, "[mr] resized to %ux%u\n", reqW, reqH);
+        }
+      }
+
       map.jumpTo(mln::CameraOptions()
                      .withCenter(mln::LatLng(c.getLat(), c.getLon()))
                      .withZoom(c.getZoom())

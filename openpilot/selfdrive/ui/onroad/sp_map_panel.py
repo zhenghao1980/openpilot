@@ -102,6 +102,7 @@ class MapPanel:
     self._zoom_bias = 0.0
     self._zoom_plus_rect = None
     self._zoom_minus_rect = None
+    self._last_zoom_btn_t = 0.0   # 防抖：WSLg/XTEST 可能产生幻影点击，限制缩放按钮触发频率
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -393,13 +394,19 @@ class MapPanel:
     if ui_state.map_panel_mode != 0:
       pt = rl.Vector2(x, y)
       pr, mr = getattr(self, '_zoom_plus_rect', None), getattr(self, '_zoom_minus_rect', None)
+      now = time.monotonic()
+      zoom_btn_ok = (now - self._last_zoom_btn_t) > 0.5
       if pr is not None and (pr.x - ZOOM_HIT_PAD <= x <= pr.x + pr.width + ZOOM_HIT_PAD
                              and pr.y - ZOOM_HIT_PAD <= y <= pr.y + pr.height + ZOOM_HIT_PAD):
-        self._zoom_bias = min(self._zoom_bias + ZOOM_STEP, ZOOM_BIAS_LIM)
+        if zoom_btn_ok:
+          self._zoom_bias = min(self._zoom_bias + ZOOM_STEP, ZOOM_BIAS_LIM)
+          self._last_zoom_btn_t = now
         return
       if mr is not None and (mr.x - ZOOM_HIT_PAD <= x <= mr.x + mr.width + ZOOM_HIT_PAD
                              and mr.y - ZOOM_HIT_PAD <= y <= mr.y + mr.height + ZOOM_HIT_PAD):
-        self._zoom_bias = max(self._zoom_bias - ZOOM_STEP, -ZOOM_BIAS_LIM)
+        if zoom_btn_ok:
+          self._zoom_bias = max(self._zoom_bias - ZOOM_STEP, -ZOOM_BIAS_LIM)
+          self._last_zoom_btn_t = now
         return
 
     # 在 panel 外点 nav icon 已被上面 return；这里只处理 panel 内的点击
