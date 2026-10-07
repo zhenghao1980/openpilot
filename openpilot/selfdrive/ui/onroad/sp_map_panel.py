@@ -13,7 +13,6 @@ applied server-side; the frame is drawn unrotated.
 import math
 import os
 import time
-from collections import deque
 
 import pyray as rl
 
@@ -27,7 +26,6 @@ DIVIDER   = rl.Color(38, 44, 54, 255)
 ROUTE_CAS = rl.Color(10, 13, 18, 255)
 ROUTE_GLO = rl.Color(46, 140, 255, 60)
 ROUTE     = rl.Color(46, 140, 255, 255)
-TRAIL     = rl.Color(46, 140, 255, 50)
 ARROW     = rl.WHITE
 ARROW_RING= rl.Color(15, 19, 25, 210)
 CARD      = rl.Color(24, 29, 37, 235)
@@ -40,9 +38,6 @@ PANEL_W_FRAC   = 0.5
 VIEW_MIN_M     = 200.
 VIEW_MAX_M     = 1200.
 VIEW_SECS      = 8.
-TRAIL_MAX      = 600
-TRAIL_MIN_DIST = 5.0
-TRAIL_TIMEOUT  = 60.0
 SCALE_BAR_TARGET_PX = 120.0  # 比例尺目标像素长度：1-2-5 序列取不超过此值的最大档
 _SCALE_STEPS = (20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000)
 CENTER_FRAC    = 0.5   # 与 maprenderd 视口中心一致（对齐关键点）
@@ -62,13 +57,6 @@ ZOOM_HIT_PAD   = 14     # 按钮热区四周外扩（触屏/坐标偏移容错�
 ZOOM_STEP      = 1.0    # 每按一次 +/- 调一档
 ZOOM_BTN_R     = 20     # 缩放按钮半径（px）
 ZOOM_BIAS_LIM  = 8.0    # 手动 bias 限幅（最终 zoom 仍由 ZOOM_MIN/MAX clamp）
-
-
-def _haversine_m(lat1, lon1, lat2, lon2):
-  R = 6371000.0
-  dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-  a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-  return 2 * R * math.asin(math.sqrt(a))
 
 
 def _mercator_xy(lat, lon):
@@ -136,9 +124,6 @@ def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H):
 
 class MapPanel:
   def __init__(self):
-    self._trail = deque(maxlen=TRAIL_MAX)
-    self._last_pos = None
-    self._last_ts = 0.0
     self._font = gui_app.font(FontWeight.NORMAL)
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._mr = MapRenderClient()
@@ -220,16 +205,6 @@ class MapPanel:
 
   def update(self, sm) -> None:
     self._poll_taps()
-    if sm.updated['mapdExtendedOut']:
-      pos = sm['mapdExtendedOut'].position
-      cur = (pos.latitude, pos.longitude)
-      now = time.monotonic()
-      if self._last_pos is None or _haversine_m(*self._last_pos, *cur) > TRAIL_MIN_DIST:
-        self._trail.append(cur)
-        self._last_pos, self._last_ts = cur, now
-      elif now - self._last_ts > TRAIL_TIMEOUT:
-        self._trail.clear()
-        self._last_pos = None
 
   @staticmethod
   def _stroke(pts, casing_color, casing_w, core_color, core_w):
@@ -421,11 +396,6 @@ class MapPanel:
       sx = dx * math.cos(b) - dy * math.sin(b)
       sy = dx * math.sin(b) + dy * math.cos(b)
       return cx + sx / mpp_view, cy - sy / mpp_view
-
-    if len(self._trail) >= 2:
-      pts = [p for p in (to_screen(*p) for p in self._trail) if p is not None]
-      for i in range(1, len(pts)):
-        rl.draw_line_ex(rl.Vector2(pts[i - 1][0], pts[i - 1][1]), rl.Vector2(pts[i][0], pts[i][1]), 2.0, TRAIL)
 
     if data_ok:
       pts = [p for p in (to_screen(p.latitude, p.longitude) for p in ext.path) if p is not None]
