@@ -480,9 +480,12 @@ class MapPanel:
     bar_px = bar_m / mpp_view
     bar_label = f"{bar_m} m" if bar_m < 1000 else f"{bar_m / 1000:g} km"
     by = py + panel.height - 44
-    # 缩放 +/- 按钮：+ 贴面板右缘，比例尺在其左，- 再在比例尺左侧
+    # 缩放 +/- 按钮与比例尺：整体底部居中，避开右下角地图 launcher 图标
+    # （handle_tap 走缓存 rect，命中随绘制自动一致）
     zr, gap = ZOOM_BTN_R, 14
-    plus_cx = px + panel.width - 16 - zr
+    group_w = zr * 4 + gap * 2 + bar_px
+    group_cx = px + panel.width / 2
+    plus_cx = group_cx + group_w / 2 - zr
     bx_right = plus_cx - zr - gap
     bx = bx_right - bar_px
     minus_cx = bx - gap - zr
