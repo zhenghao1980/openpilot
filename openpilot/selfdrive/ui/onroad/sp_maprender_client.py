@@ -87,7 +87,9 @@ class MapRenderClient:
 
   def send_cam(self, lat, lon, zoom, bearing, width, height, pitch=0.0):
     now = time.monotonic()
-    if now - self._last_cam_t < 0.1:
+    # 50Hz：中心已是速度外推的连续轨迹，高频率下发让 maprenderd 每个渲染帧
+    # 拿到的位置滞后 <20ms；10Hz 阶梯被渲染线程非均匀抽样会产生快慢性交替
+    if now - self._last_cam_t < 0.02:
       return
     self._last_cam_t = now
     msg = messaging.new_message("mapRenderCam")
