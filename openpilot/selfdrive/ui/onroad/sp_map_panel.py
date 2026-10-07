@@ -100,6 +100,7 @@ def _cjk_road_name(name: str) -> str:
 
 
 BEAR_TURN_RATE = 110.0  # 视图方位角最大转速 °/s：转向时底图渐进旋转而非瞬切
+NAV_AHEAD_M    = 120.0  # 3D 导航视角：相机中心沿航向提前量，车辆落在屏幕 ~62% 高度
 
 
 def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H):
@@ -350,8 +351,14 @@ class MapPanel:
     # The toggle lives on the map panel itself; default = 2D (top-down).
     pitch = 60.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
 
+    # 导航视角（高德/苹果式）：3D heading-up 时相机中心沿航向提前 NAV_AHEAD_M，
+    # 车辆投影落在屏幕 ~62% 高度（视野看向远方，而非车钉死在屏幕中心）
+    cam_lat0, cam_lon0 = lat0, lon0
+    if pitch > 0.5 and ui_state.map_orientation != 1:
+      cam_lat0, cam_lon0 = _dest_point(lat0, lon0, bearing, NAV_AHEAD_M)
+
     # ---- 底图：向 maprenderd 发相机，取回帧 ----
-    self._mr.send_cam(lat0, lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
+    self._mr.send_cam(cam_lat0, cam_lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
     mpp_view = mpp_screen  # 无底图时 overlay/比例尺退化为相机 mpp
     tex = self._mr.frame_texture(sm)
     scale, src_x, src_y = 1.0, 0.0, 0.0
@@ -389,7 +396,7 @@ class MapPanel:
     def to_screen(lat, lon):
       if proj3d is not None:
         fw, fh, brad, prad = proj3d
-        r = _project3d(lat, lon, lat0, lon0, zoom, brad, prad, fw, fh)
+        r = _project3d(lat, lon, cam_lat0, cam_lon0, zoom, brad, prad, fw, fh)
         if r is None:
           return None  # 相机后方，跳过
         return _frame_to_panel(*r)
@@ -424,13 +431,16 @@ class MapPanel:
         self._tex_ego = None
     if getattr(self, '_tex_ego', None) is not None:
       if pitch > 0.5:
-        # 3D：图标压扁贴地（垂直向按俯仰角压缩），朝向 = 绝对航向 - 平滑视图航向。
-        # heading-up 转向期间视图航向滞后，差值让箭头咬住真实路面延伸方向。
+        # 3D：图标压扁贴地（垂直向按俯仰角压缩），位置用透视投影（导航视角下在
+        # 屏幕下 1/3），朝向 = 绝对航向 - 平滑视图航向——转向期间视图航向滞后，
+        # 差值让箭头咬住真实路面延伸方向。
         ego_brg = gps.bearingDeg if sm.valid['gpsLocationExternal'] else 0.0
         icon_rot = ego_brg if ui_state.map_orientation == 1 else (ego_brg - bearing) % 360.0
         dh = 128.0 * math.cos(math.radians(pitch))
+        pos = to_screen(lat0, lon0)
+        ex, ey = pos if pos is not None else (cx, cy)
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
-                            rl.Rectangle(cx - 64, cy - dh / 2, 128.0, dh),
+                            rl.Rectangle(ex - 64, ey - dh / 2, 128.0, dh),
                             rl.Vector2(64, dh / 2), float(icon_rot), rl.WHITE)
       else:
         rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
