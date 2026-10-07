@@ -511,9 +511,8 @@ class MapPanel:
 
   def _3d_toggle_hit_rect(self, px: float, py: float, pw: float) -> rl.Rectangle:
     """右上角 2D/3D 切换按钮的矩形。绘制和 hit_test 共用此函数返回的同一 rect。
-    按钮大小跟当前显示的图标一致: 2D=110x110, 3D=90x90。"""
-    is_3d = ui_state.map_panel_3d_active
-    size = 90 if is_3d else 110
+    两种状态固定 110x110、同一位置——切换 2D/3D 时按钮原地不动。"""
+    size = 110
     pad_x = 24
     pad_y = 166  # 避开 road name card (高 128 + pad 24)
     return rl.Rectangle(px + pw - size - pad_x, py + pad_y, size, size)
@@ -522,18 +521,16 @@ class MapPanel:
     """懒加载 2D/3D 切换图标 texture (绝对路径引用桌面 icon)。"""
     if not hasattr(self, '_3d_icons_loaded'):
       self._3d_icons_loaded = True
-      icon_size = int(self._3d_toggle_hit_rect(None, 0, 0).width) if False else 110
       try:
         self._tex_2d = gui_app.texture("icons/map_2d.png", 110, 110)
-        self._tex_3d = gui_app.texture("icons/map_3d.png", 90, 90)
+        self._tex_3d = gui_app.texture("icons/map_3d.png", 110, 110)
       except Exception as e:
         print(f"[mapd] icon load failed: {e}", flush=True)
         self._tex_2d = self._tex_3d = None
 
   def _draw_3d_toggle_button(self, rect: rl.Rectangle) -> None:
     """绘制 2D/3D 切换图标。rect 必须与 handle_tap 用的 _3d_toggle_hit_rect 完全相同。
-    状态反着显示: 当前 2D 显示 3D 图标 (点切到 3D)，当前 3D 显示 2D 图标 (点切回 2D)。
-    图标按 rect 尺寸绘制 (rect 由 is_3d 状态决定 size=90 或 110)。"""
+    状态反着显示: 当前 2D 显示 3D 图标 (点切到 3D)，当前 3D 显示 2D 图标 (点切回 2D)。"""
     self._load_3d_icons()
     is_3d = ui_state.map_panel_3d_active
     tex = self._tex_3d if not is_3d else self._tex_2d
