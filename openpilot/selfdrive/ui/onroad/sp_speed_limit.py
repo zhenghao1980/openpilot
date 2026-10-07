@@ -94,8 +94,9 @@ class SpeedLimitRenderer:
 
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
     sign_size = UI_CONFIG.set_speed_height - 40
-    # 挪到最大巡航速度指示牌正下方，水平居中
-    x = rect.x + 60 + (set_speed_width - sign_size) / 2
+    # 与最大巡航速度指示牌中线对齐：方框 x 算法与 hud_renderer._draw_set_speed 完全一致
+    box_x = rect.x + 60 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
+    x = box_x + (set_speed_width - sign_size) / 2
     y = rect.y + 45 + UI_CONFIG.set_speed_height + self.SIGN_SPACING
     sign_rect = rl.Rectangle(x, y, sign_size, sign_size)
 
@@ -121,8 +122,9 @@ class SpeedLimitRenderer:
     rl.draw_circle_v(center, radius, white)
     rl.draw_ring(center, radius * 0.78, radius, 0, 360, 36, red)
 
-    text_color = red if is_overspeed else rl.BLACK
-    font_size = int(radius * (0.62 if len(val) >= 3 else 0.78))
+    # 字固定黑色、放大一号（is_overspeed 不再改色，保持用户要求的可读性）
+    text_color = rl.BLACK
+    font_size = int(radius * (0.72 if len(val) >= 3 else 0.90))
     self._draw_text_centered(self._font_bold, val, font_size, center, text_color)
 
   def _render_mutcd(self, rect: rl.Rectangle, val: str, is_overspeed: bool) -> None:
