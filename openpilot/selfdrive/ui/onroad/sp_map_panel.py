@@ -99,6 +99,40 @@ def _cjk_road_name(name: str) -> str:
   return name.strip(" \t/·•-—_")
 
 
+BEAR_TURN_RATE = 110.0  # 视图方位角最大转速 °/s：转向时底图渐进旋转而非瞬切
+
+
+def _project3d(lat, lon, cam_lat, cam_lon, zoom, bearing_rad, pitch_rad, W, H):
+  """maplibre 相机一致的 3D 透视投影：经纬度 -> 渲染帧像素坐标。
+
+  fov = 2*atan(1/3)（maplibre 默认，焦距 f=3），相机距地面中心 1.5*H 像素。
+  标定方法：与 mbgl-render 同参数输出逐点比对（bearing 0/90 均吻合）。
+  相机后方（z>=0）返回 None。
+  """
+  world = 512.0 * (2.0 ** zoom)
+
+  def _w(la, lo):
+    x = (lo + 180.0) / 360.0 * world
+    s = math.sin(math.radians(la))
+    y = (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * world
+    return x, y
+
+  wx, wy = _w(lat, lon)
+  cx_, cy_ = _w(cam_lat, cam_lon)
+  px_ = wx - cx_
+  yup = cy_ - wy  # 北为正
+  x1 = px_ * math.cos(bearing_rad) - yup * math.sin(bearing_rad)
+  y1 = px_ * math.sin(bearing_rad) + yup * math.cos(bearing_rad)
+  y2 = y1 * math.cos(pitch_rad)
+  z = -y1 * math.sin(pitch_rad) - 1.5 * H
+  if z >= -1e-6:
+    return None
+  f = 3.0
+  ndc_x = (f / (W / H)) * x1 / (-z)
+  ndc_y = f * y2 / (-z)
+  return ((ndc_x + 1) * 0.5 * W, (1 - ndc_y) * 0.5 * H)
+
+
 class MapPanel:
   def __init__(self):
     self._trail = deque(maxlen=TRAIL_MAX)
@@ -136,6 +170,24 @@ class MapPanel:
     self._gps_pos_t = None # 上次轨迹积分时间戳
     self._gps_vel = None   # (speed, bearing) 最新固定解速度
     self._gps_nfix = 0     # 已处理的固定解计数（初始收敛阶段用大增益）
+    self._view_bearing = None  # 平滑后的视图方位角（转向时渐进旋转，避免底图瞬切）
+    self._vb_t = None
+
+  def _smooth_bearing(self, target: float, now: float) -> float:
+    """视图方位角限速逼近目标值（沿最短弧），消除转向时底图的突变式切换。"""
+    if self._view_bearing is None:
+      self._view_bearing = target
+      self._vb_t = now
+      return target
+    dt = min(max(now - (self._vb_t or now), 1e-3), 0.5)
+    self._vb_t = now
+    diff = (target - self._view_bearing + 180.0) % 360.0 - 180.0
+    step = BEAR_TURN_RATE * dt
+    if abs(diff) <= step:
+      self._view_bearing = target % 360.0
+    else:
+      self._view_bearing = (self._view_bearing + math.copysign(step, diff)) % 360.0
+    return self._view_bearing
 
   def _poll_taps(self) -> None:
     """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
@@ -289,9 +341,10 @@ class MapPanel:
     # 反推 mpp_screen，否则底图（按 zoom 渲染）与矢量叠加（按 mpp 投影）错位
     zoom = min(max(zoom + self._zoom_bias, ZOOM_MIN), ZOOM_MANUAL_MAX)
     mpp_screen = math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * (2 ** zoom))
-    bearing = gps.bearingDeg if sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0 else 0.0
+    tgt_bearing = gps.bearingDeg if sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0 else 0.0
     if ui_state.map_orientation == 1:
-      bearing = 0.0
+      tgt_bearing = 0.0
+    bearing = self._smooth_bearing(tgt_bearing, now)
 
     # 3D pitch: 60° when panel's 2D/3D toggle is active + zoom deep enough.
     # The toggle lives on the map panel itself; default = 2D (top-down).
@@ -301,6 +354,7 @@ class MapPanel:
     self._mr.send_cam(lat0, lon0, zoom, bearing, int(panel.width), int(panel.height), pitch)
     mpp_view = mpp_screen  # 无底图时 overlay/比例尺退化为相机 mpp
     tex = self._mr.frame_texture(sm)
+    scale, src_x, src_y = 1.0, 0.0, 0.0
     if tex is not None and rl.is_texture_valid(tex):
       w, h = self._mr._tex_size
       # 按 tex 原比例裁剪 source rect，避免拉伸变形
@@ -323,7 +377,22 @@ class MapPanel:
     cx, cy = px + panel.width / 2, py + panel.height * CENTER_FRAC
     meters_per_rad_x = EARTH_R * math.cos(math.radians(lat0))
 
+    # 3D 模式下用与 maplibre 一致的透视投影（参数同已标定的 _project3d）
+    proj3d = None
+    if pitch > 0.5 and tex is not None and rl.is_texture_valid(tex):
+      fw, fh = self._mr._tex_size
+      proj3d = (fw, fh, math.radians(bearing), math.radians(pitch))
+
+    def _frame_to_panel(sx, sy):
+      return px + (sx - src_x) * scale, py + (sy - src_y) * scale
+
     def to_screen(lat, lon):
+      if proj3d is not None:
+        fw, fh, brad, prad = proj3d
+        r = _project3d(lat, lon, lat0, lon0, zoom, brad, prad, fw, fh)
+        if r is None:
+          return None  # 相机后方，跳过
+        return _frame_to_panel(*r)
       mx, my = _mercator_xy(lat, lon)
       dx = (mx - cx_w) * meters_per_rad_x
       dy = (my - cy_w) * EARTH_R
@@ -332,17 +401,18 @@ class MapPanel:
       return cx + sx / mpp_view, cy - sy / mpp_view
 
     if len(self._trail) >= 2:
-      pts = [to_screen(*p) for p in self._trail]
+      pts = [p for p in (to_screen(*p) for p in self._trail) if p is not None]
       for i in range(1, len(pts)):
         rl.draw_line_ex(rl.Vector2(pts[i - 1][0], pts[i - 1][1]), rl.Vector2(pts[i][0], pts[i][1]), 2.0, TRAIL)
 
     if data_ok:
-      pts = [to_screen(p.latitude, p.longitude) for p in ext.path]
-      alpha = 150 if match_dim else 255
-      self._stroke(pts, ROUTE_CAS, 12.0, ROUTE_CAS, 9.0)
-      self._stroke(pts, ROUTE_CAS, 8.0, rl.Color(ROUTE_GLO.r, ROUTE_GLO.g, ROUTE_GLO.b, 110 if not match_dim else 60), 7.0)
-      self._stroke(pts, rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5,
-                   rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5)
+      pts = [p for p in (to_screen(p.latitude, p.longitude) for p in ext.path) if p is not None]
+      if len(pts) >= 2:
+        alpha = 150 if match_dim else 255
+        self._stroke(pts, ROUTE_CAS, 12.0, ROUTE_CAS, 9.0)
+        self._stroke(pts, ROUTE_CAS, 8.0, rl.Color(ROUTE_GLO.r, ROUTE_GLO.g, ROUTE_GLO.b, 110 if not match_dim else 60), 7.0)
+        self._stroke(pts, rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5,
+                     rl.Color(ROUTE.r, ROUTE.g, ROUTE.b, alpha), 4.5)
 
     # ---- 自车图标：蓝色圆形带白色向上箭头 (ego_circle_A.png) ----
     if not hasattr(self, '_ego_loaded'):
@@ -352,10 +422,20 @@ class MapPanel:
       except Exception as _e:
         print(f"[sp_map_panel] ego icon load fail: {_e}", flush=True)
         self._tex_ego = None
-    rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
     if getattr(self, '_tex_ego', None) is not None:
-      half = 64
-      rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
+      if pitch > 0.5:
+        # 3D：图标压扁贴地（垂直向按俯仰角压缩），朝向 = 绝对航向 - 平滑视图航向。
+        # heading-up 转向期间视图航向滞后，差值让箭头咬住真实路面延伸方向。
+        ego_brg = gps.bearingDeg if sm.valid['gpsLocationExternal'] else 0.0
+        icon_rot = ego_brg if ui_state.map_orientation == 1 else (ego_brg - bearing) % 360.0
+        dh = 128.0 * math.cos(math.radians(pitch))
+        rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
+                            rl.Rectangle(cx - 64, cy - dh / 2, 128.0, dh),
+                            rl.Vector2(64, dh / 2), float(icon_rot), rl.WHITE)
+      else:
+        rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
+        half = 64
+        rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
 
     name = out.roadName or out.wayRef
     if name:
