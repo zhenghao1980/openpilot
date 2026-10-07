@@ -349,7 +349,7 @@ class MapPanel:
 
     # 3D pitch: 60° when panel's 2D/3D toggle is active + zoom deep enough.
     # The toggle lives on the map panel itself; default = 2D (top-down).
-    pitch = 65.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
+    pitch = 75.0 if (ui_state.map_panel_3d_active and zoom >= 14.0) else 0.0
 
     # 导航视角（高德/苹果式）：3D heading-up 时相机中心沿航向提前 NAV_AHEAD_M，
     # 车辆投影落在屏幕 ~62% 高度（视野看向远方，而非车钉死在屏幕中心）
