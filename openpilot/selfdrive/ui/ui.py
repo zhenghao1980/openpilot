@@ -3,18 +3,6 @@ import os
 import time
 import sys
 
-# PC dev helper: if a fake_mapd_inproc.py is reachable from PYTHONPATH,
-# spawn an in-process thread that publishes synthetic mapd/gps/carState to the
-# ui's msgq context. Real-device runs don't ship this module so the import
-# silently no-ops.
-try:
-  from fake_mapd_inproc import spawn as _spawn_fake_mapd
-  print(f"[ui] fake_mapd_inproc found at __file__={_spawn_fake_mapd.__module__}; sys.path[0:5]={sys.path[0:5]}", flush=True)
-  _spawn_fake_mapd()
-  print("[ui] fake_mapd_inproc spawn ok", flush=True)
-except Exception as _e:
-  print(f"[ui] fake_mapd_inproc not loaded (ok for device): {_e}", flush=True)
-
 from openpilot.cereal import messaging
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.common.realtime import Priority, config_realtime_process, set_core_affinity
