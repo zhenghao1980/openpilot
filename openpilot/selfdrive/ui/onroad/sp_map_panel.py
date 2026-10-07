@@ -414,23 +414,25 @@ class MapPanel:
         # 差值让箭头咬住真实路面延伸方向。
         ego_brg = gps.bearingDeg if sm.valid['gpsLocationExternal'] else 0.0
         icon_rot = ego_brg if ui_state.map_orientation == 1 else (ego_brg - bearing) % 360.0
-        dh = 128.0 * math.cos(math.radians(pitch))
+        # 图标尺寸随缩放换算：z16（100m 档，约 1.8m/px）固定 128px 相当于 234m 长的
+        # 巨毯盖在城市上空——这才是“漂浮在天空”的主因（挤出高度 10px 只是次要）。
+        # 按 44m 世界长度换算并限制在 52~128px：远看是贴地小车标，近看仍饱满。
+        isz = max(52.0, min(128.0, 44.0 / max(mpp_view, 1e-3)))
+        dh = isz * math.cos(math.radians(pitch))
         pos = to_screen(lat0, lon0)
         ex, ey = pos if pos is not None else (cx, cy)
         # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
         # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
         # 阴影紧贴图标正下方（勿偏右下/过大，否则图标显得飞高）。
-        # 挤出高度按真实世界高度(4m)随缩放换算：固定 10px 在 z16（约 1.8m/px，
-        # 即 100m 缩放档）相当于 18m 高的柱子，远看整只车漂浮在空中；
-        # 换算后远看贴地、近看仍有立体感。
+        # 挤出高度按真实世界高度(4m)随缩放换算：固定 10px 在 z16 相当于 18m 高柱。
         ext = max(1.0, min(24.0, 4.0 / max(mpp_view, 1e-3)))
-        rl.draw_ellipse(int(ex), int(ey + 3), 46.0, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
+        rl.draw_ellipse(int(ex), int(ey + isz * 0.023), isz * 0.36, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
-                            rl.Rectangle(ex - 64, ey - dh / 2 - ext, 128.0, dh),
-                            rl.Vector2(64, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
+                            rl.Rectangle(ex - isz / 2, ey - dh / 2 - ext, isz, dh),
+                            rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.Color(56, 84, 140, 255))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
-                            rl.Rectangle(ex - 64, ey - dh / 2, 128.0, dh),
-                            rl.Vector2(64, dh / 2), float(icon_rot), rl.WHITE)
+                            rl.Rectangle(ex - isz / 2, ey - dh / 2, isz, dh),
+                            rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.WHITE)
       else:
         rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
         half = 64
