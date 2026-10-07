@@ -191,19 +191,22 @@ class MapPanel:
     return self._view_bearing
 
   def _poll_taps(self) -> None:
-    """触摸/鼠标自轮询 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
+    """触摸点击路由 (替代 Widget 事件穿透——panel 非 Widget，事件到不了 handle_tap)。
 
-    C3X 触摸极快（按下+抬起常 <50ms）：若整个点击落在两帧 PollInputEvents 之间，
-    is_mouse_button_pressed 的帧级状态比对会漏掉（press/release 同帧抵消）。
-    因此同时采 raylib 手势系统的 GESTURE_TAP——它逐事件处理队列，短点击也能捕获。
+    事件源用 gui_app.mouse_events：它由 140Hz 后台线程采样触摸状态、逐帧合并成
+    事件队列（press/release 状态跳变各记一条）。C3X 触摸极快（<50ms）也能被
+    140Hz 采样捕获，因此不丢点击——边栏按钮每次必响应就是走的这条链。
+    旧实现用渲染帧级的 is_mouse_button_pressed / GESTURE_TAP 轮询，点击落在
+    两帧之间就被抵消漏掉（用户报告的"偶尔管用"）。GESTURE_TAP 保留作兜底，
     两路都触发时按时间+距离去重，避免一次点击切两档。"""
     if not ui_state.started or not ui_state.off_line_map_panel:
       return
     now = time.monotonic()
     tx = ty = None
-    if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
-      m = rl.get_mouse_position()
-      tx, ty = m.x, m.y
+    for ev in gui_app.mouse_events:
+      if ev.left_pressed:
+        tx, ty = ev.pos.x, ev.pos.y
+        break
     if tx is None and rl.is_gesture_detected(rl.GESTURE_TAP):
       p = rl.get_touch_position(0)
       tx, ty = p.x, p.y
