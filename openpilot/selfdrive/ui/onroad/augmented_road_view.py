@@ -134,11 +134,19 @@ class AugmentedRoadView(CameraView):
       self._sp_torque_bar.render(_tq_rect)
     self._sp_developer_ui.render(view_rect)
 
-    # mapd map panel (v0.7 debug)
+    # End clipping region
+    rl.end_scissor_mode()
+
+    # mapd map panel: 必须画在行车画面裁剪区之外——半屏模式下面板占右半边，
+    # 若仍在 view_rect 的 scissor 内渲染会被整体裁掉（黑屏）。
+    rl.begin_scissor_mode(
+      int(self._content_rect.x),
+      int(self._content_rect.y),
+      int(self._content_rect.width),
+      int(self._content_rect.height)
+    )
     self._map_panel.update(ui_state.sm)
     self._map_panel.render(self._content_rect)
-
-    # End clipping region
     rl.end_scissor_mode()
 
     # Draw colored border based on driving state
