@@ -420,7 +420,10 @@ class MapPanel:
         # 厚度感：地面阴影 + 向上偏移的暗色副本（挤出侧壁）+ 主图标。
         # 屏幕上方向 ≈ 地面远离相机方向，偏移副本露出的边即车标厚度。
         # 阴影紧贴图标正下方（勿偏右下/过大，否则图标显得飞高）。
-        ext = 10.0
+        # 挤出高度按真实世界高度(4m)随缩放换算：固定 10px 在 z16（约 1.8m/px，
+        # 即 100m 缩放档）相当于 18m 高的柱子，远看整只车漂浮在空中；
+        # 换算后远看贴地、近看仍有立体感。
+        ext = max(1.0, min(24.0, 4.0 / max(mpp_view, 1e-3)))
         rl.draw_ellipse(int(ex), int(ey + 3), 46.0, max(dh * 0.40, 8.0), rl.Color(0, 0, 0, 100))
         rl.draw_texture_pro(self._tex_ego, rl.Rectangle(0, 0, 128, 128),
                             rl.Rectangle(ex - 64, ey - dh / 2 - ext, 128.0, dh),
