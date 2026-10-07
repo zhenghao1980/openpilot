@@ -581,18 +581,16 @@ class MapPanel:
       rl.draw_texture_ex(tex, rl.Vector2(rect.x, rect.y), 0.0, 1.0, rl.WHITE)
 
   def hit_test(self, x: float, y: float) -> bool:
-    """点 (x,y) 是否落在面板交互区（mode!=0 时为面板矩形；mode=0 时为 nav icon 圆）。
+    """点 (x,y) 是否落在面板交互区（mode!=0 时为整个 content rect；mode=0 时为 nav icon 圆）。
     供外部（augmented_road_view._handle_mouse_press）抑制边栏点击回调——
-    否则点地图的同时会切边栏，布局一跳导致面板按钮失灵。"""
+    否则点地图/行车画面收缩区的同时会切边栏，布局一跳导致面板按钮失灵。
+    mode 1 时左半边是行车画面，点击语义为"收起地图"（见 handle_tap），同样要抑制边栏。"""
     if not ui_state.started or not ui_state.off_line_map_panel:
       return False
     rx, ry, rw, rh = self._last_content_rect
     mode = ui_state.map_panel_mode
     if mode != 0:
-      if mode == 2:
-        return rx <= x <= rx + rw and ry <= y <= ry + rh
-      pw = rw * PANEL_W_FRAC
-      return (rx + rw - pw) <= x <= rx + rw and ry <= y <= ry + rh
+      return rx <= x <= rx + rw and ry <= y <= ry + rh
     r = ICON_SIZE // 2 + 10
     cx = rx + rw - ICON_PAD - r
     cy = ry + rh - ICON_PAD_BOTTOM - r
@@ -654,9 +652,15 @@ class MapPanel:
         ui_state.map_panel_3d_active = not ui_state.map_panel_3d_active
         return
 
-    # 命中地图 panel 区域：单击切 mode 1↔2
+    # 命中地图 panel 区域：
+    # - mode 2 (全屏地图): 单击 -> 半屏
+    # - mode 1 (半屏): 点右半边地图 -> 全屏地图；点左半边行车画面 -> 收起地图 (onroad 全屏)
     mode = ui_state.map_panel_mode
     if mode == 1:
-      ui_state.map_panel_mode = 2
+      pw = rect_w * PANEL_W_FRAC
+      if x >= rect_x + rect_w - pw:
+        ui_state.map_panel_mode = 2
+      else:
+        ui_state.map_panel_mode = 0
     elif mode == 2:
       ui_state.map_panel_mode = 1
