@@ -35,7 +35,12 @@ def drop_realtime() -> None:
 
 def set_core_affinity(cores: list[int]) -> None:
   if sys.platform == 'linux' and not PC:
-    os.sched_setaffinity(0, cores)
+    # 4-core clone devices (C3X etc.) have no CPU >3: filter requested cores
+    # by what's actually available instead of crashing with EINVAL
+    available = os.sched_getaffinity(0)
+    cores = [c for c in cores if c in available]
+    if cores:
+      os.sched_setaffinity(0, cores)
 
 
 def config_realtime_process(cores: int | list[int], priority: int) -> None:
