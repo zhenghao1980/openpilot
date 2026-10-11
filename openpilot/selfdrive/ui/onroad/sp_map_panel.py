@@ -22,6 +22,19 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.onroad.sp_map_tiles import EARTH_R
 from openpilot.selfdrive.ui.onroad.sp_maprender_client import MapRenderClient
 
+# 2026-10-11: tell manager whether the offroad map panel is visible, so it can
+# start/stop maprenderd on demand (saves ~160MB when the panel is closed).
+from openpilot.common.params import Params as _Params
+_map_panel_params = _Params()
+_map_panel_open_last = None
+
+def _sync_map_panel_param() -> None:
+  global _map_panel_open_last
+  v = 1 if ui_state.map_panel_mode != 0 else 0
+  if v != _map_panel_open_last:
+    _map_panel_open_last = v
+    _map_panel_params.put_bool("MapPanelOpen", bool(v))
+
 BG        = rl.Color(16, 20, 28, 255)
 DIVIDER   = rl.Color(38, 44, 54, 255)
 ARROW     = rl.WHITE
@@ -210,6 +223,7 @@ class MapPanel:
     self.handle_tap(tx, ty)
 
   def update(self, sm) -> None:
+    _sync_map_panel_param()
     self._poll_taps()
 
   @staticmethod

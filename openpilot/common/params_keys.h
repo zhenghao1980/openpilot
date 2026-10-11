@@ -98,6 +98,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SccXMapEnabled", {PERSISTENT, BOOL, "1"}},  // tsc-d map source switch (v0.7: switch = intent, glyphs = state)
     {"MapdSettings", {PERSISTENT, STRING, ""}},   // mapd v2 JSON settings snapshot
     {"OffLineMapPanel", {PERSISTENT, BOOL, "0"}}, // off-line map panel (nav icon + double-click switch)
+    {"MapPanelOpen", {PERSISTENT, BOOL, "0"}},   // 2026-10-11: panel visibility, gates maprenderd on-demand
     {"MapOrientationMode", {PERSISTENT, INT, "0"}}, // 0 = heading-up, 1 = north-up
     {"Map3DEnabled", {PERSISTENT, BOOL, "0"}},  // 3D buildings: pitch 60° + fill-extrusion (city zoom only)
     {"DecrEnabled", {PERSISTENT, BOOL, "0"}},

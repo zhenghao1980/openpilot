@@ -107,6 +107,7 @@ class MapRenderClient:
     self._meta = [(0, 0)] * self._N_BUF
     self._cam_meta = [None] * self._N_BUF   # 每缓冲对应的实际渲染相机回显
     self._state = [0] * self._N_BUF
+    self._upload_buf = None                 # cffi char[]，update_texture 复用
     self._cond = threading.Condition()
     self._raw = None                        # 待解码的 QOI 字节（只保留最新）
     self._raw_cam = None                    # 与 _raw 配对的相机回显
@@ -153,6 +154,7 @@ class MapRenderClient:
       except Exception:
         with self._cond:
           self._state[idx] = 0
+        print("[tex] DECODE EXC:", repr(__import__("sys").exc_info()[1])[:200], flush=True)
         continue
       with self._cond:
         self._meta[idx] = (w, h)
@@ -249,8 +251,13 @@ class MapRenderClient:
     try:
       if (self._tex is not None and rl.is_texture_valid(self._tex)
           and self._tex_size == (w, h)):
-        # 同尺寸帧直接原位更新 GPU 显存，省每帧 ~3MB 纹理新建/销毁
-        rl.update_texture(self._tex, bytes(data))
+        # pyray 包装器不接受 bytes→void*（每帧抛 TypeError 且构造 17MB 错误
+        # 信息约 60ms），复用一块 cffi 缓冲传指针，仅一次 memcpy
+        up = self._upload_buf
+        if up is None or rl.ffi.sizeof(up) < len(data):
+          up = self._upload_buf = rl.ffi.new("char[]", max(len(data), 16))
+        up[0:len(data)] = data
+        rl.update_texture(self._tex, up)
         tex = self._tex
       else:
         img = rl.Image(bytes(data), w, h, 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
@@ -258,6 +265,7 @@ class MapRenderClient:
     except Exception:
       with self._cond:
         self._state[idx] = 0
+      print("[tex] UPLOAD EXC:", repr(__import__("sys").exc_info()[1])[:200], flush=True)
       return self._tex
     with self._cond:
       self.cam_shown = self._cam_meta[idx]

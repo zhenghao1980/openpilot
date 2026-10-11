@@ -214,11 +214,16 @@ class AugmentedRoadView(CameraView):
       self.view_from_wide_calib = view_frame_from_device_frame @ wide_from_device @ device_from_calib
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
-    # Check if we can use cached matrix
+    # Check if we can use cached matrix.
+    # 必须用传入的 rect（半屏模式=左半 view_rect）而不是 _content_rect：
+    # 视频绘制、缩放、模型叠加 transform 全部以 rect 为准，否则半屏时叠加层
+    # 仍按全屏坐标绘制，与压缩后的行车画面错位。
     cache_key = (
       ui_state.sm.recv_frame['extrinsicsCalibration'],
-      self._content_rect.width,
-      self._content_rect.height,
+      rect.width,
+      rect.height,
+      rect.x,
+      rect.y,
       self.stream_type
     )
     if cache_key == self._matrix_cache_key and self._cached_matrix is not None:
@@ -236,8 +241,8 @@ class AugmentedRoadView(CameraView):
     kep = calib_transform @ INF_POINT
 
     # Calculate center points and dimensions
-    x, y = self._content_rect.x, self._content_rect.y
-    w, h = self._content_rect.width, self._content_rect.height
+    x, y = rect.x, rect.y
+    w, h = rect.width, rect.height
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
     # Ensure zoom views the whole area
