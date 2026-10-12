@@ -267,7 +267,19 @@ class MapPanel:
     if mode != 2:
       rl.draw_line_ex(rl.Vector2(px, py), rl.Vector2(px, py + rect.height), 2, DIVIDER)
 
-    ext, out, gps = sm['mapdExtendedOut'], sm['mapdOut'], sm['gpsLocationExternal']
+    # 2026-10-12: gpsLocationExternal is ONLY published by ubloxd (ublox hw).
+    # C3X uses the quectel GNSS: qcomgpsd publishes 'gpsLocation' instead, so
+    # on real hardware gpsLocationExternal is never valid and bearing would
+    # clamp to 0 (map frozen north-up + ego arrow stuck up). Prefer
+    # gpsLocationExternal when valid, fall back to gpsLocation.
+    ext, out = sm['mapdExtendedOut'], sm['mapdOut']
+    if sm.valid['gpsLocationExternal']:
+      gps = sm['gpsLocationExternal']
+      gps_updated = sm.updated['gpsLocationExternal']
+    else:
+      gps = sm['gpsLocation']
+      gps_updated = sm.updated['gpsLocation']
+    gps_valid = sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']
     tile_ok = bool(out.tileLoaded) if sm.valid['mapdOut'] else False
     ws = str(out.waySelectionType)
     match_ok = ws in ('current', 'predicted', 'possible')
@@ -275,7 +287,7 @@ class MapPanel:
     data_ok = sm.valid['mapdExtendedOut'] and len(ext.path) >= 2 and match_ok and tile_ok
 
     tlat, tlon = ext.position.latitude, ext.position.longitude
-    gps_ok = sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0
+    gps_ok = gps_valid and gps.horizontalAccuracy < 15.0
     now = time.monotonic()
     if not (sm.valid['mapdExtendedOut'] and data_ok):
       self._ctr = None
@@ -296,7 +308,7 @@ class MapPanel:
       if g0 is not None and now - g0[2] > 1.0:
         sp = 0.0   # 固定解久未更新，停止外推避免漂移
       self._gps_pos[0], self._gps_pos[1] = _dest_point(self._gps_pos[0], self._gps_pos[1], br, sp * dt_frame)
-    if gps_ok and sm.updated['gpsLocationExternal']:
+    if gps_ok and gps_updated:
       if self._gps_pos is None:
         self._gps_pos = [gps.latitude, gps.longitude]
       else:
@@ -352,7 +364,7 @@ class MapPanel:
     # 反推 mpp_screen，否则底图（按 zoom 渲染）与矢量叠加（按 mpp 投影）错位
     zoom = min(max(zoom + self._zoom_bias, ZOOM_MIN), ZOOM_MANUAL_MAX)
     mpp_screen = math.cos(math.radians(lat0)) * 2 * math.pi * EARTH_R / (256 * (2 ** zoom))
-    tgt_bearing = gps.bearingDeg if sm.valid['gpsLocationExternal'] and gps.horizontalAccuracy < 15.0 else 0.0
+    tgt_bearing = gps.bearingDeg if gps_ok else 0.0
     if ui_state.map_orientation == 1:
       tgt_bearing = 0.0
     bearing = self._smooth_bearing(tgt_bearing, now)
@@ -456,7 +468,7 @@ class MapPanel:
         # 3D：图标压扁贴地（垂直向按俯仰角压缩），位置用透视投影（导航视角下在
         # 屏幕下 1/3），朝向 = 绝对航向 - 平滑视图航向——转向期间视图航向滞后，
         # 差值让箭头咬住真实路面延伸方向。
-        ego_brg = gps.bearingDeg if sm.valid['gpsLocationExternal'] else 0.0
+        ego_brg = gps.bearingDeg if gps_valid else 0.0
         icon_rot = ego_brg if ui_state.map_orientation == 1 else (ego_brg - bearing) % 360.0
         # 图标尺寸随缩放换算：z16（100m 档，约 1.8m/px）固定 128px 相当于 234m 长的
         # 巨毯盖在城市上空——这才是“漂浮在天空”的主因（挤出高度 10px 只是次要）。
@@ -494,7 +506,7 @@ class MapPanel:
                             rl.Rectangle(ex, ey, isz, dh),
                             rl.Vector2(isz / 2, dh / 2), float(icon_rot), rl.WHITE)
       else:
-        rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and sm.valid['gpsLocationExternal'] else 0.0
+        rot_deg = gps.bearingDeg if ui_state.map_orientation == 1 and gps_valid else 0.0
         half = 64
         rl.draw_texture_ex(self._tex_ego, rl.Vector2(cx - half, cy - half), float(rot_deg), 1.0, rl.WHITE)
 
