@@ -113,7 +113,6 @@ class AugmentedRoadView(CameraView):
     # Draw all UI overlays
     self.model_renderer.render(view_rect)
     self._hud_renderer.render(view_rect)
-    self.alert_renderer.render(view_rect)
     self.driver_state_renderer.render(view_rect)
 
     # Custom UI extension point - add custom overlays here
@@ -147,6 +146,18 @@ class AugmentedRoadView(CameraView):
     )
     self._map_panel.update(ui_state.sm)
     self._map_panel.render(self._content_rect)
+    rl.end_scissor_mode()
+
+    # 2026-10-13: 告警保持全屏尺寸——半屏地图下不随行车画面缩到左半边。
+    # FULL 告警与横幅都用完整 content rect 绘制（与全屏地图模式行为一致），
+    # 且在地图面板之后绘制，关键告警永远压在所有内容之上。
+    rl.begin_scissor_mode(
+      int(self._content_rect.x),
+      int(self._content_rect.y),
+      int(self._content_rect.width),
+      int(self._content_rect.height)
+    )
+    self.alert_renderer.render(self._content_rect)
     rl.end_scissor_mode()
 
     # Draw colored border based on driving state
