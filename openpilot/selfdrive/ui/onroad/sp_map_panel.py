@@ -40,6 +40,20 @@ TEXT_DIM  = rl.Color(130, 138, 150, 255)
 TEXT_NONE = rl.Color(100, 106, 116, 255)
 ACCENT_OK = rl.Color(76, 175, 80, 255)
 
+# 罗盘配色（2026-10-13 设计定稿，见设计稿 compass_fan.py / compass_fan.png）
+COMPASS_DISC   = rl.Color(15, 19, 25, 216)
+COMPASS_RING   = rl.Color(52, 60, 72, 255)
+COMPASS_GRAY   = rl.Color(154, 163, 176, 255)
+COMPASS_ACC    = rl.Color(111, 179, 255, 255)
+COMPASS_TICK45 = rl.Color(96, 104, 117, 255)
+COMPASS_TICK15 = rl.Color(66, 73, 84, 255)
+COMPASS_HI     = rl.Color(215, 226, 242, 255)
+COMPASS_DOT    = rl.Color(96, 104, 117, 255)
+COMPASS_FAN_HA = 30.0    # 视角扇面半角（度）
+_COMPASS_A0    = 135     # 扇面中心最大不透明度
+_COMPASS_TICK_ZONE = COMPASS_FAN_HA + 10.0   # 刻度提亮过渡区
+_COMPASS_LETTER_ZONE = COMPASS_FAN_HA + 14.0 # 字母放大过渡区
+
 PANEL_W_FRAC   = 0.5
 VIEW_MIN_M     = 200.
 VIEW_MAX_M     = 1200.
@@ -65,6 +79,10 @@ ZOOM_HIT_PAD   = 14     # 按钮热区四周外扩（触屏/坐标偏移容错�
 ZOOM_STEP      = 1.0    # 每按一次 +/- 调一档
 ZOOM_BTN_R     = 20     # 缩放按钮半径（px）
 ZOOM_BIAS_LIM  = 8.0    # 手动 bias 限幅（最终 zoom 仍由 ZOOM_MIN/MAX clamp）
+
+
+def _lerp255(a, b, t):
+  return int(a + (b - a) * t)
 
 
 def _mercator_xy(lat, lon):
@@ -471,9 +489,25 @@ class MapPanel:
       src_y = (h - src_h) / 2
       rl.draw_texture_pro(tex, rl.Rectangle(src_x, src_y, src_w, src_h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
 
+    # ---- 罗盘几何（先算好：标题卡要让出罗盘列）----
+    # heading-up: 盘面随平滑视图方位角旋转，扇面固定指屏幕上方（=行进方向）；
+    # north-up: 盘面静止，扇面咬住真实航向。读数指标（顶部小三角）固定。
+    if ui_state.map_orientation == 1:
+      compass_disc_brg, compass_phi = 0.0, (gps.bearingDeg if gps_valid else 0.0)
+    else:
+      compass_disc_brg, compass_phi = bearing, 0.0
+    compass_size = 132 if mode == 2 else 116
+    compass_compact = mode != 2
+    compass_cx = px + pw - 24 - compass_size / 2
+    # 底缘与 2D/3D 按钮顶 (py+166) 留 16px 间距；读数指标在盘面顶外 13px
+    compass_cy = py + 166 - 16 - compass_size + compass_size / 2
+
     # ---- 右上角 2D/3D 切换按钮 (绘制和 hit_test 用同一 rect) ----
     self._3d_pill_rect = self._3d_toggle_hit_rect(px, py, pw)
     self._draw_3d_toggle_button(self._3d_pill_rect)
+
+    # ---- 罗盘：右上角 2D/3D 按钮正上方（2026-10-13 设计定稿）----
+    self._draw_compass(compass_cx, compass_cy, compass_size, compass_disc_brg, compass_phi, compass_compact)
 
     # ---- 叠加层投影（与底图同一相机：中心/zoom/bearing 完全一致） ----
     cx_w, cy_w = _mercator_xy(lat0, lon0)
@@ -564,7 +598,8 @@ class MapPanel:
     name = out.roadName or out.wayRef
     if name:
       name = _cjk_road_name(name)
-    self._card(px + 16, py + 14, panel.width - 32, 128)
+    # 路名卡右缘收到罗盘列左侧（罗盘占位 = 尺寸+24 右边距+16 间距），避免遮挡
+    self._card(px + 16, py + 14, panel.width - 32 - (compass_size + 24 + 16), 128)
     if data_ok and name:
       # Use the system fallback font (NotoSansCJKsc with full CJK coverage
       # as configured by the user in application.py / po file). Don't load a
@@ -614,10 +649,8 @@ class MapPanel:
     self._draw_zoom_button(plus_cx, btn_cy, "+")
     self._draw_zoom_button(minus_cx, btn_cy, "-")
 
-    if ui_state.map_orientation == 1:
-      # 左上角路名卡加高后移到左侧下方，避开右上角导航图标列
-      rl.draw_circle(int(px + 44), int(py + 170), 16, CARD)
-      rl.draw_text_ex(self._font_bold, "N", rl.Vector2(px + 38, py + 160), 24, 0, TEXT)
+    # north-up 的"N"指示已由右上角罗盘（扇面咬住真实航向）替代
+    # （2026-10-13 视角扇面罗盘定稿，原 N 圆点代码移除）
 
     # nav icon launcher (右下角，与 mode=0 同一位置；mode=2 全屏下也保留以便单击关闭)
     self._draw_nav_icon(rect)
@@ -670,6 +703,99 @@ class MapPanel:
     tex = self._tex_3d if not is_3d else self._tex_2d
     if tex is not None:
       rl.draw_texture_ex(tex, rl.Vector2(rect.x, rect.y), 0.0, 1.0, rl.WHITE)
+
+  # ---- 罗盘（2026-10-13 设计定稿：视角扇面方案）----
+  # 中心渐变扇面代表视角/行进方向；盘面随方位旋转（heading-up）或静止（north-up），
+  # 转入扇面的方向字母放大+变蓝、转出恢复；外圈刻度转入提亮、转出渐暗。
+  # heading-up: disc_brg=视图方位角, fan_phi=0（扇面固定指屏幕上方=行进方向）
+  # north-up:   disc_brg=0,        fan_phi=真实航向（扇面咬住行进方向）
+  @staticmethod
+  def _ang_diff(a, b):
+    return (a - b + 180.0) % 360.0 - 180.0
+
+  @staticmethod
+  def _clerp(c1, c2, t):
+    t = min(max(t, 0.0), 1.0)
+    return rl.Color(int(c1.r + (c2.r - c1.r) * t), int(c1.g + (c2.g - c1.g) * t),
+                    int(c1.b + (c2.b - c1.b) * t), 255)
+
+  def _draw_compass(self, cx, cy, size, disc_brg, fan_phi, compact):
+    R = size / 2.0
+    rl.draw_circle(int(cx), int(cy), R, COMPASS_DISC)
+    rl.draw_circle_lines(int(cx), int(cy), R, COMPASS_RING)
+
+    def arc_pt(ang, r):
+      rad = math.radians(ang)
+      return cx + r * math.sin(rad), cy - r * math.cos(rad)
+
+    # 顶部固定读数指标（不随盘面旋转）
+    rl.draw_triangle(rl.Vector2(cx - 7, cy - R - 13), rl.Vector2(cx + 7, cy - R - 13),
+                     rl.Vector2(cx, cy - R + 1), TEXT)
+    # ---- 渐变扇面：2° 切片，角度剖面 (1-|t|/HA)^1.6，内/外两段半径带 ----
+    rf = R - (14 if compact else 22)
+    step = 2.0
+    t = -COMPASS_FAN_HA
+    while t < COMPASS_FAN_HA - 1e-6:
+      t_mid = t + step / 2
+      prof = (1 - abs(t_mid) / COMPASS_FAN_HA) ** 1.6
+      p1, p2 = arc_pt(fan_phi + t, rf), arc_pt(fan_phi + t + step, rf)
+      pm = arc_pt(fan_phi + t + step / 2, rf * 0.62)
+      a_in = int(_COMPASS_A0 * prof)
+      a_out = int(_COMPASS_A0 * prof * 0.62)
+      # 内圈带（顶点->0.62rf 三角）
+      rl.draw_triangle(rl.Vector2(cx, cy), rl.Vector2(*pm),
+                       rl.Vector2(*arc_pt(fan_phi + t, rf * 0.62)),
+                       rl.Color(COMPASS_ACC.r, COMPASS_ACC.g, COMPASS_ACC.b, a_in))
+      rl.draw_triangle(rl.Vector2(cx, cy), rl.Vector2(*arc_pt(fan_phi + t + step, rf * 0.62)),
+                       rl.Vector2(*pm),
+                       rl.Color(COMPASS_ACC.r, COMPASS_ACC.g, COMPASS_ACC.b, a_in))
+      # 外圈带（0.62rf->rf 梯形拆两个三角）
+      q1, q2 = arc_pt(fan_phi + t, rf * 0.62), arc_pt(fan_phi + t + step, rf * 0.62)
+      c_out = rl.Color(COMPASS_ACC.r, COMPASS_ACC.g, COMPASS_ACC.b, a_out)
+      rl.draw_triangle(rl.Vector2(*q1), rl.Vector2(*q2), rl.Vector2(*p2), c_out)
+      rl.draw_triangle(rl.Vector2(*q1), rl.Vector2(*p2), rl.Vector2(*p1), c_out)
+      t += step
+    # 扇面外缘：软光晕弧（逐段 alpha 跟随角度剖面，替代早期硬边线）
+    seg = 2.0
+    t = -COMPASS_FAN_HA
+    while t < COMPASS_FAN_HA - 1e-6:
+      t_mid = t + seg / 2
+      prof = (1 - abs(t_mid) / COMPASS_FAN_HA) ** 1.6
+      g1 = arc_pt(fan_phi + t, rf * 0.97)
+      g2 = arc_pt(fan_phi + t + seg, rf * 0.97)
+      glow = rl.Color(_lerp255(COMPASS_ACC.r, 255, 0.30), _lerp255(COMPASS_ACC.g, 255, 0.30),
+                      _lerp255(COMPASS_ACC.b, 255, 0.30), int(95 * prof))
+      rl.draw_line_ex(rl.Vector2(*g1), rl.Vector2(*g2), 2.4, glow)
+      t += seg
+    # ---- 刻度：转入扇面提亮，转出渐暗 ----
+    for deg in range(0, 360, 15):
+      w = max(0.0, 1 - abs(self._ang_diff(deg - disc_brg, fan_phi)) / _COMPASS_TICK_ZONE) ** 1.2
+      if deg % 90 == 0:
+        base_c, ln, wd = TEXT, (8 if compact else 15), 3
+      elif deg % 45 == 0:
+        base_c, ln, wd = COMPASS_TICK45, (6 if compact else 10), 2
+      else:
+        base_c, ln, wd = COMPASS_TICK15, (4 if compact else 6), 1.5
+      col = self._clerp(base_c, COMPASS_HI, 0.85 * w)
+      a = math.radians(deg - disc_brg)
+      x1, y1 = cx + R * math.sin(a), cy - R * math.cos(a)
+      x2, y2 = cx + (R - ln) * math.sin(a), cy - (R - ln) * math.cos(a)
+      rl.draw_line_ex(rl.Vector2(x1, y1), rl.Vector2(x2, y2), wd, col)
+    # ---- 字母：转入扇面放大+变蓝，转出恢复 ----
+    r_letter = R * 0.70 if compact else R - 30
+    base_px = 17 if compact else 26
+    font = font_fallback(self._font_bold)
+    for deg, ch in ((0, "N"), (90, "E"), (180, "S"), (270, "W")):
+      w = max(0.0, 1 - abs(self._ang_diff(deg - disc_brg, fan_phi)) / _COMPASS_LETTER_ZONE) ** 1.3
+      scale = 1 + 0.5 * w
+      col = self._clerp(COMPASS_GRAY, COMPASS_ACC, w)
+      a = math.radians(deg - disc_brg)
+      lx, ly = cx + r_letter * math.sin(a), cy - r_letter * math.cos(a)
+      fs = base_px * scale
+      m = rl.measure_text_ex(font, ch, fs, 0)
+      rl.draw_text_ex(font, ch, rl.Vector2(lx - m.x / 2, ly - m.y / 2), fs, 0, col)
+    # 扇面顶点圆点
+    rl.draw_circle(int(cx), int(cy), 4, COMPASS_DOT)
 
   def hit_test(self, x: float, y: float) -> bool:
     """点 (x,y) 是否落在面板交互区（mode!=0 时为整个 content rect；mode=0 时为 nav icon 圆）。
