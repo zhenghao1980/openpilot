@@ -24,16 +24,11 @@ from openpilot.selfdrive.ui.onroad.sp_maprender_client import MapRenderClient
 
 # 2026-10-11: tell manager whether the offroad map panel is visible, so it can
 # start/stop maprenderd on demand (saves ~160MB when the panel is closed).
+# 2026-10-12: plus a driving-time prewarm — cold first frame took ~10s on C3X
+# (process start + shader compile + tile/glyph load). See MapPanel._prewarm*.
 from openpilot.common.params import Params as _Params
 _map_panel_params = _Params()
 _map_panel_open_last = None
-
-def _sync_map_panel_param() -> None:
-  global _map_panel_open_last
-  v = 1 if ui_state.map_panel_mode != 0 else 0
-  if v != _map_panel_open_last:
-    _map_panel_open_last = v
-    _map_panel_params.put_bool("MapPanelOpen", bool(v))
 
 BG        = rl.Color(16, 20, 28, 255)
 DIVIDER   = rl.Color(38, 44, 54, 255)
@@ -177,6 +172,10 @@ class MapPanel:
     self._gps_nfix = 0     # 已处理的固定解计数（初始收敛阶段用大增益）
     self._view_bearing = None  # 平滑后的视图方位角（转向时渐进旋转，避免底图瞬切）
     self._vb_t = None
+    # maprenderd 预热状态（见 _prewarm_active）
+    self._warm_t0 = None     # 触发时刻（None=未触发）
+    self._warm_done = False  # 首帧已出：整段行驶保持 maprenderd 常驻
+    self._warm_cam_t = 0.0   # 上次补发热相机的时间戳
 
   def _smooth_bearing(self, target: float, now: float) -> float:
     """视图方位角限速逼近目标值（沿最短弧），消除转向时底图的突变式切换。"""
@@ -223,8 +222,60 @@ class MapPanel:
     self.handle_tap(tx, ty)
 
   def update(self, sm) -> None:
-    _sync_map_panel_param()
+    self._sync_map_panel_param(sm)
     self._poll_taps()
+
+  # ---- maprenderd 预热（2026-10-12）----
+  # 冷启动首帧在 C3X 上实测 ~10s：manager 拉起进程（~1s）+ MapLibre 首帧
+  # （着色器编译 + 瓦片/字形加载 + 文字整形，数秒）。行驶中提前在当前位置
+  # z15 渲一帧，把三类缓存全部焐热；用户打开地图时首帧 <1s。
+  # 代价：maprenderd 整段行驶常驻（~150MB，zram 兜底）；停车熄火自动释放。
+  def _sync_map_panel_param(self, sm) -> None:
+    global _map_panel_open_last
+    v = 1 if (ui_state.map_panel_mode != 0 or self._prewarm_active(sm)) else 0
+    if v != _map_panel_open_last:
+      _map_panel_open_last = v
+      _map_panel_params.put_bool("MapPanelOpen", bool(v))
+
+  def _prewarm_active(self, sm) -> bool:
+    if not ui_state.started or not ui_state.off_line_map_panel:
+      self._warm_t0 = None
+      self._warm_done = False
+      return False
+    if self._warm_done:
+      return True  # 保持整段行驶，提前释放会让着色器/字形缓存全丢
+    now = time.monotonic()
+    if self._warm_t0 is None:
+      if self._warm_trigger(sm):
+        self._warm_t0 = now
+        return False  # 下一拍把 MapPanelOpen 置 1，manager 才开始拉进程
+      return False
+    if now - self._warm_t0 > 20.0:
+      return False  # 预热超时（maprenderd 没起来/没出帧）：放弃，不占内存
+    # maprenderd 启动约 1s；起来之前发的 cam 没人收，限频补发直到首帧到达
+    if now - self._warm_cam_t > 0.5:
+      self._warm_cam_t = now
+      lat, lon = self._warm_pos(sm)
+      if lat is not None:
+        self._mr.send_cam(lat, lon, 15.0, 0.0, 960, 960, 0.0)
+      # 面板还藏着，没人消费帧：顺手排空帧 socket，兼作"首帧已到"信号
+      self._mr.frame_texture(sm)
+    if self._mr._last_frame_t > 0.0:
+      self._warm_done = True
+    return True
+
+  @staticmethod
+  def _warm_trigger(sm) -> bool:
+    gps_ok = sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']
+    moving = sm.valid['carState'] and abs(sm['carState'].vEgo) > 3.0
+    return bool(gps_ok and moving)
+
+  @staticmethod
+  def _warm_pos(sm):
+    if not (sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']):
+      return None, None
+    g = sm['gpsLocationExternal'] if sm.valid['gpsLocationExternal'] else sm['gpsLocation']
+    return g.latitude, g.longitude
 
   @staticmethod
   def _stroke(pts, casing_color, casing_w, core_color, core_w):
