@@ -30,45 +30,6 @@
    }
   },
   {
-   "id": "3d_buildings",
-   "type": "fill-extrusion",
-   "source": "openmaptiles",
-   "source-layer": "building",
-   "minzoom": 13,
-   "filter": [
-    "all",
-    [
-     "==",
-     "$type",
-     "Polygon"
-    ]
-   ],
-   "paint": {
-    "fill-extrusion-color": "#3d4a63",
-    "fill-extrusion-height": [
-     "*",
-     1.5,
-     [
-      "coalesce",
-      [
-       "get",
-       "render_height"
-      ],
-      10
-     ]
-    ],
-    "fill-extrusion-base": [
-     "coalesce",
-     [
-      "get",
-      "render_min_height"
-     ],
-     0
-    ],
-    "fill-extrusion-opacity": 0.6
-   }
-  },
-  {
    "id": "waterway",
    "type": "line",
    "source": "openmaptiles",
@@ -830,6 +791,45 @@
       ]
      ]
     }
+   }
+  },
+  {
+   "id": "3d_buildings",
+   "type": "fill-extrusion",
+   "source": "openmaptiles",
+   "source-layer": "building",
+   "minzoom": 13,
+   "filter": [
+    "all",
+    [
+     "==",
+     "$type",
+     "Polygon"
+    ]
+   ],
+   "paint": {
+    "fill-extrusion-color": "#3d4a63",
+    "fill-extrusion-height": [
+     "*",
+     1.5,
+     [
+      "coalesce",
+      [
+       "get",
+       "render_height"
+      ],
+      10
+     ]
+    ],
+    "fill-extrusion-base": [
+     "coalesce",
+     [
+      "get",
+      "render_min_height"
+     ],
+     0
+    ],
+    "fill-extrusion-opacity": 0.6
    }
   },
   {
