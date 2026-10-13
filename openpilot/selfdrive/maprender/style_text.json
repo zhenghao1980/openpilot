@@ -25,8 +25,8 @@
    "source": "openmaptiles",
    "source-layer": "water",
    "paint": {
-    "fill-color": "#10141c",
-    "fill-outline-color": "#0d1622"
+    "fill-color": "#182334",
+    "fill-outline-color": "#1d2c42"
    }
   },
   {
@@ -35,8 +35,20 @@
    "source": "openmaptiles",
    "source-layer": "waterway",
    "paint": {
-    "line-color": "#16222f",
-    "line-width": 1
+    "line-color": "#2a4a66",
+    "line-width": {
+     "base": 1.2,
+     "stops": [
+      [
+       10,
+       1
+      ],
+      [
+       16,
+       2.5
+      ]
+     ]
+    }
    }
   },
   {
@@ -53,7 +65,7 @@
     "forest"
    ],
    "paint": {
-    "fill-color": "#0e141b"
+    "fill-color": "#14231b"
    }
   },
   {
@@ -194,6 +206,64 @@
    }
   },
   {
+   "id": "road_tunnel",
+   "type": "line",
+   "source": "openmaptiles",
+   "source-layer": "transportation",
+   "minzoom": 11,
+   "filter": [
+    "all",
+    [
+     "==",
+     "$type",
+     "LineString"
+    ],
+    [
+     "==",
+     "brunnel",
+     "tunnel"
+    ],
+    [
+     "in",
+     "class",
+     "motorway",
+     "trunk",
+     "motorway_link",
+     "trunk_link",
+     "primary",
+     "primary_link",
+     "secondary",
+     "secondary_link",
+     "tertiary"
+    ]
+   ],
+   "layout": {
+    "line-cap": "round",
+    "line-join": "round"
+   },
+   "paint": {
+    "line-color": "#1a2330",
+    "line-opacity": 0.85,
+    "line-width": {
+     "base": 1.4,
+     "stops": [
+      [
+       12,
+       2
+      ],
+      [
+       16,
+       14
+      ],
+      [
+       19,
+       38
+      ]
+     ]
+    }
+   }
+  },
+  {
    "id": "road_motorway",
    "type": "line",
    "source": "openmaptiles",
@@ -210,6 +280,11 @@
      "class",
      "motorway",
      "trunk"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -254,6 +329,11 @@
      "class",
      "motorway_link",
      "trunk_link"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -297,6 +377,11 @@
      "==",
      "class",
      "primary"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -340,6 +425,11 @@
      "==",
      "class",
      "secondary"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -383,6 +473,11 @@
      "==",
      "class",
      "tertiary"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -426,6 +521,11 @@
      "==",
      "class",
      "minor"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
@@ -469,6 +569,11 @@
      "==",
      "class",
      "service"
+    ],
+    [
+     "!=",
+     "brunnel",
+     "tunnel"
     ]
    ],
    "layout": {
