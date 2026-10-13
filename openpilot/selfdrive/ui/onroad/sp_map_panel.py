@@ -489,6 +489,20 @@ class MapPanel:
       src_y = (h - src_h) / 2
       rl.draw_texture_pro(tex, rl.Rectangle(src_x, src_y, src_w, src_h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
 
+    # ---- 无底图帧：说清原因，别让用户对着空白猜（2026-10-13 早 7 点路试：
+    # 冷启动 GPS 被错误系统时钟拖了 ~6 分钟无定位，面板全程空白，用户反复
+    # 开关地图误以为坏了）。两种情况分开提示：
+    #  - GPS 无定位：等定位，地图数据本身没问题
+    #  - 有定位但无数据：离线数据/匹配问题
+    if tex is None or not rl.is_texture_valid(tex):
+      if not gps_valid:
+        msg, msize = "Waiting for GPS fix...", 72
+      else:
+        msg, msize = "offline map: no data", 64
+      font = font_fallback(self._font_bold)
+      tw = rl.measure_text_ex(font, msg, msize, 0).x
+      rl.draw_text_ex(font, msg, rl.Vector2(px + (panel.width - tw) / 2, py + panel.height * 0.42), msize, 0, TEXT_NONE)
+
     # ---- 罗盘几何（先算好：标题卡要让出罗盘列）----
     # heading-up: 盘面随平滑视图方位角旋转，扇面固定指屏幕上方（=行进方向）；
     # north-up: 盘面静止，扇面咬住真实航向。读数指标（顶部小三角）固定。
@@ -608,7 +622,8 @@ class MapPanel:
       color = TEXT if not match_dim else TEXT_DIM
       rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 33), 90, 0, color)
     else:
-      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 46), 64, 0, TEXT_NONE)
+      top_msg = "waiting for GPS fix..." if not gps_valid else "offline map: no data"
+      rl.draw_text_ex(self._font, top_msg, rl.Vector2(px + 34, py + 46), 64, 0, TEXT_NONE)
 
     self._card(px + 16, py + panel.height - 78, panel.width - 32, 62)
     if sm.valid['mapdOut']:
@@ -617,7 +632,8 @@ class MapPanel:
       status = ws if tile_ok else f"{ws} · no tiles"
     else:
       status = "mapd offline"
-    rl.draw_text_ex(self._font, f"match: {status}", rl.Vector2(px + 54, py + panel.height - 58), 26, 0, TEXT_DIM)
+    gps_status = "fix" if gps_ok else "acquiring"
+    rl.draw_text_ex(self._font, f"gps: {gps_status} · match: {status}", rl.Vector2(px + 54, py + panel.height - 58), 26, 0, TEXT_DIM)
     # 比例尺：1-2-5 序列选不超过目标像素的最大档，单位随量级切 m/km
     bar_m = _SCALE_STEPS[0]
     for _s in _SCALE_STEPS:

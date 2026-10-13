@@ -110,6 +110,36 @@ def at_cmd(cmd: str) -> str:
 def gps_enabled() -> bool:
   return "QGPS: 1" in at_cmd("AT+QGPS?")
 
+def system_time_trustworthy() -> bool:
+  """system_time_valid() 只校验 2025-2035 区间：断电数月后 RTC 回退到几个月前
+  照样算"有效"，会把错误参考时间灌进 GNSS 引擎（2026-10-13 实例：时钟慢 202 天，
+  AT+QGPSXTRATIME 污染冷启动，首定位耗时 ~6 分钟，地图全程无坐标）。
+
+  /data/log 和 /data/params 在设备运行期间持续写入，最新 mtime 是真实时间的
+  可靠下界。系统时钟若比它还旧（停一夜以内属正常），说明 RTC 时间不可信。"""
+  if not system_time_valid():
+    return False
+  try:
+    newest = 0.0
+    for d in ("/data/log", "/data/params"):
+      if not os.path.isdir(d):
+        continue
+      for f in os.listdir(d):
+        try:
+          newest = max(newest, os.stat(os.path.join(d, f)).st_mtime)
+        except OSError:
+          pass
+    if newest <= 0:
+      return True  # 无证据可参考，维持原行为
+    skew_s = datetime.datetime.now(datetime.UTC).timestamp() - newest
+    if skew_s < -86400:
+      cloudlog.warning(f"system clock is {-skew_s/86400:.1f} days behind newest on-disk file, not trusting it for XTRA time injection")
+      return False
+  except Exception:
+    cloudlog.exception("system_time_trustworthy check failed")
+  return True
+
+
 @retry(attempts=5, delay=1.0)
 def setup_quectel(diag: ModemDiag):
   # enable OEMDRE in the NV
@@ -130,9 +160,12 @@ def setup_quectel(diag: ModemDiag):
   # don't automatically turn on GNSS on powerup
   at_cmd("AT+QGPSCFG=\"autogps\",0")
 
-  if system_time_valid():
+  if system_time_trustworthy():
     time_str = datetime.datetime.now(datetime.UTC).replace(tzinfo=None).strftime("%Y/%m/%d,%H:%M:%S")
     at_cmd(f"AT+QGPSXTRATIME=0,\"{time_str}\",1,1,1000")
+  else:
+    # 时钟不可信时宁可不灌参考时间：quectel 从星历自己解时间，比错误参考快得多
+    cloudlog.warning("skipping AT+QGPSXTRATIME: system clock is stale or unset")
 
   at_cmd("AT+QGPSCFG=\"outport\",\"usbnmea\"")
   at_cmd("AT+QGPS=1")
