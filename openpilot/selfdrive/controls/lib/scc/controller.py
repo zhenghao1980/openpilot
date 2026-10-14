@@ -13,16 +13,25 @@ The longitudinal planner applies the cap to the cruise branch and appends
 a_target to the existing min()-accel arbitration, so SCC-X can only ever make
 control more conservative; with the feature disabled or inactive the planner
 behaves exactly as stock.
+
+tsc-d (SCC-M) integration, v0.7: the map source is evaluated in
+_update_estimates from MapCurveEstimator (A1: native mapdExtendedOut.path,
+mapd zero-fork). The estimator returns the raw map target; the
+">= v_cruise -> 0" no-constraint convention is applied here, same as the
+vision sources. Map-only curves beyond vision range enter the state machine
+through the pseudo-prediction injection (see _update_estimates).
 """
 import numpy as np
 from dataclasses import dataclass
 
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.scc.arbiter import SccArbiter
 from openpilot.selfdrive.controls.lib.scc.constants import (
   A_LAT_REG_MAX_BY_PERSONALITY, A_TARGET_MIN, ABORT_ENTERING_PRED_LAT_ACC_TH, CURVE_MIN_SPEED,
   ENTERING_PRED_LAT_ACC_TH, ENTERING_SMOOTH_DECEL_BP, ENTERING_SMOOTH_DECEL_V,
-  FINISH_LAT_ACC_TH, LEAVING_ACC, LEAVING_FINISH_FRAMES, LEAVING_LAT_ACC_TH, MIN_V, NO_OVERSHOOT_TIME_HORIZON,
-  SCC_X_ENABLED_PARAM, TURNING_ACC_BP, TURNING_ACC_V, TURNING_LAT_ACC_TH,
+  FINISH_LAT_ACC_TH, LEAVING_ACC, LEAVING_FINISH_FRAMES, LEAVING_LAT_ACC_TH, MAP_ENTERING_REACH_MARGIN,
+  MIN_V, NO_OVERSHOOT_TIME_HORIZON, SCC_MAP_ENABLED_PARAM, SCC_X_ENABLED_PARAM,
+  TURNING_ACC_BP, TURNING_ACC_V, TURNING_LAT_ACC_TH,
 )
 from openpilot.selfdrive.controls.lib.scc.map import MapCurveEstimator
 from openpilot.selfdrive.controls.lib.scc.vision_a import VisionAEstimator
@@ -54,6 +63,8 @@ class SccXController:
     self.arbiter = SccArbiter()
 
     self.enabled = self.params.get_bool(SCC_X_ENABLED_PARAM)
+    # tsc-d map source switch (v0.7: switch = intent, on-screen glyphs = state; default on)
+    self.map_enabled = True
     self.frame = -1
     self.state = "disabled"
 
@@ -73,6 +84,9 @@ class SccXController:
   def _update_params(self) -> None:
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.enabled = self.params.get_bool(SCC_X_ENABLED_PARAM)
+      # tsc-d: missing param defaults to enabled; "0" disables the map source
+      raw = self.params.get(SCC_MAP_ENABLED_PARAM)
+      self.map_enabled = True if raw is None else bool(int(raw))
 
   def _update_estimates(self, model_v2, personality) -> None:
     # personality comes from sm['selfdriveState'] as a capnp _DynamicEnum,
@@ -88,12 +102,36 @@ class SccXController:
     self._a_lat_reg_max = A_LAT_REG_MAX_BY_PERSONALITY[personality_idx]
     self._max_pred_lat_acc = self.vision_a.update(model_v2, self._v_ego)
     self.vision_b.update(model_v2, self._v_ego, self._a_lat_reg_max)
+    # tsc-d (A1): evaluate the map curve source with this frame's speed and
+    # personality. The estimator returns the RAW map target; the
+    # ">= v_cruise -> 0" no-constraint convention is applied below, same as
+    # the vision sources, so the arbiter hysteresis never sees a baseline
+    # above cruise. The pseudo-prediction injection must come AFTER the
+    # arbiter call: _vision_a_speed() above reads _max_pred_lat_acc and must
+    # see the vision-only value.
+    self.map_est.set_a_lat_max(self._a_lat_reg_max)
     self.map_est.update(self._v_ego, self._a_ego)
+    v_map = self.map_est.v_target if (self.map_enabled and
+                                      0. < self.map_est.v_target < self._v_cruise) else 0.
     self._v_arb, self._has_target = self.arbiter.update(
-      self.map_est.v_target, self.map_est.confidence, MapCurveEstimator.MIN_CONFIDENCE,
+      v_map, self.map_est.confidence if self.map_enabled else 0., MapCurveEstimator.MIN_CONFIDENCE,
       self._vision_a_speed(), self.vision_a.confidence,
       self._vision_b_speed(), self.vision_b.confidence,
     )
+    # tsc-d entering extension (v0.6): fold the map target into the predicted
+    # lat-acc channel the state machine already reads. With v_ego above the
+    # map curve speed the pseudo-prediction necessarily exceeds
+    # a_lat_reg_max (> 1.3), so the stock enter/abort thresholds decide entry
+    # with zero state-machine change. The reach-distance gate keeps far-away
+    # map curves from triggering early braking (distance gate: only when the
+    # curve is closer than MAP_ENTERING_REACH_MARGIN x the jerk-limited
+    # braking distance the estimator reports alongside the target).
+    if (self.map_enabled and
+        self.map_est.confidence >= MapCurveEstimator.MIN_CONFIDENCE and
+        0. < self.map_est.v_target < self._v_ego and
+        self.map_est.distance < MAP_ENTERING_REACH_MARGIN * self.map_est.reach_distance):
+      self._max_pred_lat_acc = max(self._max_pred_lat_acc,
+                                   self._a_lat_reg_max * (self._v_ego / self.map_est.v_target) ** 2)
 
   def _vision_a_speed(self) -> float:
     # convert predicted lat-acc back to the speed it would permit:
@@ -153,11 +191,11 @@ class SccXController:
           self._leaving_finish_cnt = 0
         else:
           # M-02/M-09: finishing requires BOTH the current lat-acc to have
-          # decayed below FINISH AND no new curve predicted ahead, held for
+          # decayed below FINISH and no new curve predicted ahead, held for
           # LEAVING_FINISH_FRAMES. Escape path: if the prediction says the
           # road ahead is clean (< ABORT_ENTERING) for the same hold time,
           # leave even while the current lat-acc sits in the [FINISH, TURNING)
-          # band (within the lat-acc budget) - otherwise the state latches in
+          # band (within the lat-acc budget) - otherwise the latches in
           # leaving and the car keeps the 0.5 m/s^2 accel ceiling long after
           # the curve is gone.
           finish_ok = (self._current_lat_acc < FINISH_LAT_ACC_TH and
@@ -219,9 +257,22 @@ class SccXController:
       self.frame += 1
       return SccXOutput(state=self.state)
 
+    # tsc-d (A1): inject the mapd messages cached by the msgq SubMaster.
+    # Services must be registered and subscribed first (M1 cereal work); until
+    # then sm.sock lacks the entry and the estimator stays invalid, so the
+    # map source degrades to "absent" with no effect on control.
+    # tolerate dict-like sm (unit tests): no sock table -> map source absent
+    _socks = getattr(sm, 'sock', None) or {}
+    _mono = getattr(sm, 'logMonoTime', None) or {}
+    self.map_est.update_msg(sm['mapdExtendedOut'] if 'mapdExtendedOut' in _socks else None,
+                            sm['mapdOut'] if 'mapdOut' in _socks else None,
+                            _mono.get('mapdExtendedOut', 0) if hasattr(_mono, 'get') else 0)
     self._update_estimates(sm['modelV2'], personality)
     prev_state = self.state
     self._update_state(long_enabled, long_override)
+    if self.state != prev_state:
+      cloudlog.info(f"scc-x: {prev_state} -> {self.state} (src={self.arbiter.source}, "
+                    f"v_arb={self._v_arb:.1f}, map={self.map_est.v_target:.1f}@{self.map_est.distance:.0f}m)")
     if self.state == "disabled" and prev_state != "disabled":
       # M-07: fire on the frame the state machine LANDS on disabled from any
       # other state (the transition edge), regardless of what prev_state was.

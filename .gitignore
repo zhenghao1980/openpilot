@@ -98,3 +98,8 @@ build/
 .context/
 PLAN.md
 TASK.md
+
+# PC/WSL dev environment artifacts (not for device)
+openpilot/opendbc_repo
+openpilot/selfdrive/maprender/build*/
+openpilot/selfdrive/maprender/maprenderd

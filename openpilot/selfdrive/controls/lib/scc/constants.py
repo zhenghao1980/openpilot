@@ -1,5 +1,5 @@
 # Derived from sunnypilot SCC-V / dragonpilot VisionTurnController - MIT License
-"""Shared constants for SCC-X.
+"""Shared constants for the SCC-X package.
 
 Threshold lineage:
 - Lateral-acceleration state thresholds (1.3/1.1/1.6) and the 97th-percentile
@@ -90,3 +90,14 @@ NO_OVERSHOOT_TIME_HORIZON = 4.0  # s
 
 # Min speed any curve target may request
 CURVE_MIN_SPEED = 2.8  # m/s (~10 km/h)
+
+# --- tsc-d (map curve source, A1) additions, mapd 功能说明书 v0.7 -----------
+
+# The entering pseudo-prediction only borrows the map target once it sits
+# within this multiple of the jerk-limited braking distance
+# (MapCurveEstimator.reach_distance). Road-test tunable (决策点 1).
+MAP_ENTERING_REACH_MARGIN = 1.2
+
+# tsc-d map source switch param (registered in openpilot/common/params_keys.h,
+# default "1"; v0.7: switch = intent, on-screen glyphs = state)
+SCC_MAP_ENABLED_PARAM = "SccXMapEnabled"

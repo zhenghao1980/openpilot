@@ -76,6 +76,8 @@ class LongitudinalPlanner:
     # Passive shadow logger: records e2e no-lead decel episodes to
     # /data/e2e_decel_shadow.jsonl. Never influences control outputs.
     self.shadow = E2EDecelShadow(self.dt)
+    # tsc-d: last SccXOutput, forwarded to publish() for the sccXState message
+    self._scc_x_out = None
 
   def update(self, sm):
     if len(sm['carControl'].orientationNED) == 3:
@@ -111,6 +113,8 @@ class LongitudinalPlanner:
                               personality=sm['selfdriveState'].personality)
     if scc_x.v_cruise_cap is not None:
       v_cruise = min(v_cruise, scc_x.v_cruise_cap)
+    # tsc-d: keep the output for the sccXState publish
+    self._scc_x_out = scc_x
 
     if reset_state:
       self.v_desired_filter.x = v_ego
@@ -214,3 +218,26 @@ class LongitudinalPlanner:
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
 
     pm.send('longitudinalPlan', plan_send)
+
+    # sccXState: full SCC-X observability (mapd 功能说明书 3.8) — state, source
+    # attribution, per-source confidence and the raw map target for tsc-d tuning
+    if self._scc_x_out is not None:
+      scc_msg = messaging.new_message('sccXState')
+      scc_msg.valid = sm.all_checks()
+      s = scc_msg.sccXState
+      o = self._scc_x_out
+      s.enabled = self.scc_x.enabled
+      s.mapEnabled = self.scc_x.map_enabled
+      s.state = o.state
+      s.source = o.source
+      s.active = o.active
+      s.vCruiseCap = o.v_cruise_cap if o.v_cruise_cap is not None else -1.
+      s.aTarget = o.a_target if o.a_target is not None else 0.
+      s.debugVTarget = o.debug_v_target
+      s.vMap = self.scc_x.map_est.v_target
+      s.confMap = self.scc_x.map_est.confidence
+      s.confVisionA = self.scc_x.vision_a.confidence
+      s.confVisionB = self.scc_x.vision_b.confidence
+      s.vArb = self.scc_x._v_arb
+      s.mapReachDistance = self.scc_x.map_est.reach_distance
+      pm.send('sccXState', scc_msg)

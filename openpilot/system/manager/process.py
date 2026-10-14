@@ -45,6 +45,15 @@ def launcher(proc: str, name: str) -> None:
 def nativelauncher(pargs: list[str], cwd: str, name: str) -> None:
   os.environ['MANAGER_DAEMON'] = name
 
+  # exec the process, redirect stdout/stderr to a log file so we can verify
+  # maprenderd is actually doing work (manager normally drops stdout).
+  log_path = f"/tmp/{name}.log"
+  log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+  os.dup2(log_fd, 1)  # stdout
+  os.dup2(log_fd, 2)  # stderr
+  os.close(log_fd)
+  print(f"[{name}] launched, logging to {log_path}", flush=True)
+
   # exec the process
   os.chdir(cwd)
   os.execvp(pargs[0], pargs)
