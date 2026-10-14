@@ -1,0 +1,7 @@
+Import('env')
+
+# PC tizi UI test build: install mapd binary if present in source tree
+# Real comma 3X deployment uses aarch64 mapd binary per README §4.2
+mapd_bin = 'mapd'
+if env.File(mapd_bin).exists():
+    env.Command('mapd', mapd_bin, Copy('$TARGET', '$SOURCE'))

@@ -1,0 +1,92 @@
+diff --git a/platform/linux/src/headless_backend_egl.cpp b/platform/linux/src/headless_backend_egl.cpp
+index 4f5ec7c..55e3e4e 100644
+--- a/platform/linux/src/headless_backend_egl.cpp
++++ b/platform/linux/src/headless_backend_egl.cpp
+@@ -4,6 +4,20 @@
+ #include <mln/util/logging.hpp>
+ 
+ #include <EGL/egl.h>
++#include <EGL/eglext.h>
++
++#if defined(__linux__) && defined(__aarch64__)
++// AGNOS/Qualcomm: eglGetDisplay(EGL_DEFAULT_DISPLAY) probes a broken Wayland
++// subdriver and segfaults (libeglSubDriverWayland crashes when no compositor
++// is running). Route through GBM instead. adreno exports
++// eglGetPlatformDisplayEXT with a C++ mangled name (missing extern C linkage),
++// so it must be resolved via dlsym on the mangled symbol.
++#include <gbm.h>
++
++#include <dlfcn.h>
++#include <fcntl.h>
++#include <unistd.h>
++#endif
+ 
+ #include <cassert>
+ #include <memory>
+@@ -23,7 +37,15 @@ private:
+ 
+ public:
+     EGLDisplayConfig(Key) {
++#if defined(__linux__) && defined(__aarch64__)
++        display = createGbmDisplay();
++        if (display == EGL_NO_DISPLAY) {
++            // GBM path failed; fall back to the default display probing.
++            display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
++        }
++#else
+         display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
++#endif
+         if (display == EGL_NO_DISPLAY) {
+             throw std::runtime_error("Failed to obtain a valid EGL display.\n");
+         }
+@@ -49,7 +71,49 @@ public:
+         }
+     }
+ 
+-    ~EGLDisplayConfig() { eglTerminate(display); }
++    ~EGLDisplayConfig() {
++        eglTerminate(display);
++#if defined(__linux__) && defined(__aarch64__)
++        if (gbmDevice) {
++            gbm_device_destroy(gbmDevice);
++        }
++        if (drmFd >= 0) {
++            ::close(drmFd);
++        }
++#endif
++    }
++
++#if defined(__linux__) && defined(__aarch64__)
++    // Returns a GBM-platform EGL display, or EGL_NO_DISPLAY on any failure.
++    EGLDisplay createGbmDisplay() {
++        typedef EGLDisplay (*GetPlatformDisplayFn)(unsigned int, void*, const int*);
++        drmFd = ::open("/dev/dri/renderD128", O_RDWR);
++        if (drmFd < 0) {
++            drmFd = ::open("/dev/dri/card0", O_RDWR);
++        }
++        if (drmFd < 0) {
++            return EGL_NO_DISPLAY;
++        }
++        gbmDevice = gbm_create_device(drmFd);
++        if (!gbmDevice) {
++            return EGL_NO_DISPLAY;
++        }
++        // Qualcomm ships eglGetPlatformDisplayEXT without extern C.
++        GetPlatformDisplayFn getPlatformDisplay = reinterpret_cast<GetPlatformDisplayFn>(
++            dlsym(RTLD_DEFAULT, "_Z24eglGetPlatformDisplayEXTjP10wl_displayPKi"));
++        if (!getPlatformDisplay) {
++            getPlatformDisplay = reinterpret_cast<GetPlatformDisplayFn>(
++                dlsym(RTLD_DEFAULT, "eglGetPlatformDisplayEXT"));
++        }
++        if (!getPlatformDisplay) {
++            return EGL_NO_DISPLAY;
++        }
++        return getPlatformDisplay(EGL_PLATFORM_GBM_KHR, gbmDevice, nullptr);
++    }
++
++    int drmFd = -1;
++    gbm_device* gbmDevice = nullptr;
++#endif
+ 
+     static std::shared_ptr<const EGLDisplayConfig> create() {
+         // C++11 magic static guarantees thread-safe one-shot initialization.
