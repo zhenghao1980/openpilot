@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cxxabi.h>
 #include <execinfo.h>
 #include <cstdio>
@@ -25,6 +26,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <mln/gfx/headless_frontend.hpp>
@@ -56,21 +58,37 @@ std::string loadFile(const char* path) {
   return ss.str();
 }
 
-// style.json surgery: rewrite the openmaptiles vector source URL from
-// `mbtiles://{openmaptiles}` (or `mbtiles://china` legacy) to
-// `mbtiles://<abs path>` so vendor MBTilesFileSource reads china.mbtiles
-// directly. glyphs URL is left untouched (style_no_text.json has none).
-std::string localizeStyle(const std::string& in, const std::string& mbtiles_abs) {
+// style.json surgery: rewrite mbtiles:// alias URLs to absolute paths so the
+// vendor MBTilesFileSource reads the local .mbtiles files directly.
+// Alias table (openpilot #1425, hillshade offline elevation):
+//   mbtiles://{openmaptiles} → mbtiles://<abs>/china.mbtiles        (vector base map)
+//   mbtiles://{terrain}      → mbtiles://<abs>/terrain_<省>.mbtiles (raster-dem, hillshade)
+// The terrain source is OPTIONAL: when the terrain package file does not exist
+// the alias is left untouched; MBTilesFileSource then answers the TileJSON
+// request with NotFound, maplibre marks the source as errored and silently
+// skips the hillshade layer (Log observer is NullObserver) — the vector base
+// map renders unchanged. This is the intended graceful-degradation path.
+// glyphs URL is left untouched.
+std::string localizeStyle(const std::string& in,
+                          const std::vector<std::pair<std::string, std::string>>& alias_map) {
   // 直接替换占位符子串本身（不依赖 JSON 序列化的空格/引号格式，
   // 样式文件被任意工具重写后依然有效）
   std::string out = in;
-  for (const std::string& alias : {"{openmaptiles}", "openmaptiles", "{osm}", "osm"}) {
-    const std::string from = "mbtiles://" + alias;
-    const std::string to = "mbtiles://" + mbtiles_abs;
-    for (auto pos = out.find(from); pos != std::string::npos; pos = out.find(from))
-      out.replace(pos, from.size(), to);
+  for (const auto& [alias, abs_path] : alias_map) {
+    // 同时兼容 {alias} 占位符与裸 alias（历史样式两种写法都出现过）
+    for (const std::string& form : {"{" + alias + "}", alias}) {
+      const std::string from = "mbtiles://" + form;
+      const std::string to = "mbtiles://" + abs_path;
+      for (auto pos = out.find(from); pos != std::string::npos; pos = out.find(from))
+        out.replace(pos, from.size(), to);
+    }
   }
   return out;
+}
+
+bool fileExists(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  return f.good();
 }
 
 }  // namespace
@@ -78,6 +96,18 @@ std::string localizeStyle(const std::string& in, const std::string& mbtiles_abs)
 int main(int argc, char** argv) {
   const char* style_path = argc > 1 ? argv[1] : "/data/mapd_render/style_no_text.json";
   const char* mbtiles_path = argc > 2 ? argv[2] : "/data/mapd_render/china.mbtiles";
+  // Terrain (raster-dem) package, OPTIONAL. Resolution order:
+  //   argv[3] > $TerrainMbtilesPath > /data/mapd_render/terrain.mbtiles
+  // Kept as a runtime parameter (not baked into the style) so the nav module
+  // can later switch province packages by destination and trigger a reload.
+  std::string terrain_path;
+  if (argc > 3) {
+    terrain_path = argv[3];
+  } else if (const char* env = getenv("TerrainMbtilesPath")) {
+    terrain_path = env;
+  } else {
+    terrain_path = "/data/mapd_render/terrain.mbtiles";
+  }
   const char* asset_root = "/data/mapd_render";
 
   mln::Log::setObserver(std::make_unique<mln::Log::NullObserver>());
@@ -114,9 +144,23 @@ int main(int argc, char** argv) {
           typeid(observer).name());
 
   const std::string style_raw = loadFile(style_path);
-  auto style = localizeStyle(style_raw, mbtiles_path);
-  fprintf(stderr, "[mr] style localized: in=%zuB out=%zuB mbtiles=%s\n",
-          style_raw.size(), style.size(), mbtiles_path);
+  std::vector<std::pair<std::string, std::string>> alias_map = {
+    {"openmaptiles", mbtiles_path},
+    {"osm", mbtiles_path},  // 历史样式别名
+  };
+  // 地形包存在才替换 {terrain}；缺失时保留占位符 → 源加载静默失败 →
+  // hillshade 图层自动跳过，矢量底图不受影响（优雅降级，见 localizeStyle 注释）
+  const bool has_terrain = fileExists(terrain_path);
+  if (has_terrain) {
+    alias_map.emplace_back("terrain", terrain_path);
+  } else {
+    fprintf(stderr, "[mr] WARN: terrain package not found at %s, hillshade disabled (falling back to flat base map)\n",
+            terrain_path.c_str());
+  }
+  auto style = localizeStyle(style_raw, alias_map);
+  fprintf(stderr, "[mr] style localized: in=%zuB out=%zuB mbtiles=%s terrain=%s\n",
+          style_raw.size(), style.size(), mbtiles_path,
+          has_terrain ? terrain_path.c_str() : "(none)");
   map.getStyle().loadJSON(style);
   fprintf(stderr, "[mr] style loaded OK size=%zuB\n", style.size());
 
@@ -126,7 +170,8 @@ int main(int argc, char** argv) {
   auto last_cam_tp = std::chrono::steady_clock::now();
   bool ever_got_cam = false;
   PubMaster pm({"mapRenderFrame"});
-  printf("[maprenderd] ready (style=%s mbtiles=%s)\n", style_path, mbtiles_path);
+  printf("[maprenderd] ready (style=%s mbtiles=%s terrain=%s)\n", style_path, mbtiles_path,
+         has_terrain ? terrain_path.c_str() : "(none, hillshade off)");
 
   // ---- 编码/发送工作线程：渲染线程只出图，QOI 编码 + msgq 发送在副线程 ----
   // 渲染 12ms + 编码 10ms 串行时流水线余量很小；分离后渲染线程立刻处理
