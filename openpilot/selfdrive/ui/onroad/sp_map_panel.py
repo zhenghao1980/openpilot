@@ -489,6 +489,20 @@ class MapPanel:
       src_y = (h - src_h) / 2
       rl.draw_texture_pro(tex, rl.Rectangle(src_x, src_y, src_w, src_h), panel, rl.Vector2(0, 0), 0.0, rl.WHITE)
 
+    # ---- 无底图帧：说清原因，别让用户对着空白猜（2026-10-13 早 7 点路试：
+    # 冷启动 GPS 被错误系统时钟拖了 ~6 分钟无定位，面板全程空白，用户反复
+    # 开关地图误以为坏了）。两种情况分开提示：
+    #  - GPS 无定位：等定位，地图数据本身没问题
+    #  - 有定位但无数据：离线数据/匹配问题
+    if tex is None or not rl.is_texture_valid(tex):
+      if not gps_valid:
+        msg, msize = "Waiting for GPS fix...", 72
+      else:
+        msg, msize = "offline map: no data", 64
+      font = font_fallback(self._font_bold)
+      tw = rl.measure_text_ex(font, msg, msize, 0).x
+      rl.draw_text_ex(font, msg, rl.Vector2(px + (panel.width - tw) / 2, py + panel.height * 0.42), msize, 0, TEXT_NONE)
+
     # ---- 罗盘几何（先算好：标题卡要让出罗盘列）----
     # heading-up: 盘面随平滑视图方位角旋转，扇面固定指屏幕上方（=行进方向）；
     # north-up: 盘面静止，扇面咬住真实航向。读数指标（顶部小三角）固定。
@@ -496,17 +510,18 @@ class MapPanel:
       compass_disc_brg, compass_phi = 0.0, (gps.bearingDeg if gps_valid else 0.0)
     else:
       compass_disc_brg, compass_phi = bearing, 0.0
-    compass_size = 132 if mode == 2 else 116
+    compass_size = 200 if mode == 2 else 172
     compass_compact = mode != 2
     compass_cx = px + pw - 24 - compass_size / 2
-    # 底缘与 2D/3D 按钮顶 (py+166) 留 16px 间距；读数指标在盘面顶外 13px
-    compass_cy = py + 166 - 16 - compass_size + compass_size / 2
+    # 盘面顶距 panel 顶 20px（读数指标在盘面顶外 13px，不会顶到边缘）；
+    # 2D/3D 按钮动态跟在罗盘下方，间距 16px（见 _3d_toggle_hit_rect）
+    compass_cy = py + 20 + compass_size / 2
 
     # ---- 右上角 2D/3D 切换按钮 (绘制和 hit_test 用同一 rect) ----
-    self._3d_pill_rect = self._3d_toggle_hit_rect(px, py, pw)
+    self._3d_pill_rect = self._3d_toggle_hit_rect(px, py, pw, compass_size)
     self._draw_3d_toggle_button(self._3d_pill_rect)
 
-    # ---- 罗盘：右上角 2D/3D 按钮正上方（2026-10-13 设计定稿）----
+    # ---- 罗盘：右上角 2D/3D 按钮正上方（2026-10-13 设计定稿，22:30 加大）----
     self._draw_compass(compass_cx, compass_cy, compass_size, compass_disc_brg, compass_phi, compass_compact)
 
     # ---- 叠加层投影（与底图同一相机：中心/zoom/bearing 完全一致） ----
@@ -599,16 +614,23 @@ class MapPanel:
     if name:
       name = _cjk_road_name(name)
     # 路名卡右缘收到罗盘列左侧（罗盘占位 = 尺寸+24 右边距+16 间距），避免遮挡
-    self._card(px + 16, py + 14, panel.width - 32 - (compass_size + 24 + 16), 128)
+    card_w = panel.width - 32 - (compass_size + 24 + 16)
+    self._card(px + 16, py + 14, card_w, 128)
     if data_ok and name:
       # Use the system fallback font (NotoSansCJKsc with full CJK coverage
       # as configured by the user in application.py / po file). Don't load a
       # second atlas — that wastes raylib memory.
       font = font_fallback(self._font_bold if not match_dim else self._font)
       color = TEXT if not match_dim else TEXT_DIM
-      rl.draw_text_ex(font, name, rl.Vector2(px + 34, py + 33), 90, 0, color)
+      # 罗盘加大后卡宽变窄：路名字号自适应缩到卡内（长路名不再盖到罗盘列）
+      fs = 90
+      while fs > 44 and rl.measure_text_ex(font, name, fs, 0).x > card_w - 36:
+        fs -= 6
+      ty = py + 33 + (90 - fs) * 0.45  # 缩小时视觉居中原位微调
+      rl.draw_text_ex(font, name, rl.Vector2(px + 34, ty), fs, 0, color)
     else:
-      rl.draw_text_ex(self._font, "offline map: no data", rl.Vector2(px + 34, py + 46), 64, 0, TEXT_NONE)
+      top_msg = "waiting for GPS fix..." if not gps_valid else "offline map: no data"
+      rl.draw_text_ex(self._font, top_msg, rl.Vector2(px + 34, py + 46), 64, 0, TEXT_NONE)
 
     self._card(px + 16, py + panel.height - 78, panel.width - 32, 62)
     if sm.valid['mapdOut']:
@@ -617,7 +639,8 @@ class MapPanel:
       status = ws if tile_ok else f"{ws} · no tiles"
     else:
       status = "mapd offline"
-    rl.draw_text_ex(self._font, f"match: {status}", rl.Vector2(px + 54, py + panel.height - 58), 26, 0, TEXT_DIM)
+    gps_status = "fix" if gps_ok else "acquiring"
+    rl.draw_text_ex(self._font, f"gps: {gps_status} · match: {status}", rl.Vector2(px + 54, py + panel.height - 58), 26, 0, TEXT_DIM)
     # 比例尺：1-2-5 序列选不超过目标像素的最大档，单位随量级切 m/km
     bar_m = _SCALE_STEPS[0]
     for _s in _SCALE_STEPS:
@@ -676,12 +699,13 @@ class MapPanel:
     ox, oy = (10, 20) if label == "+" else (7, 22)
     rl.draw_text_ex(self._font_bold, label, rl.Vector2(cx - ox, cy - oy), 36, 0, TEXT)
 
-  def _3d_toggle_hit_rect(self, px: float, py: float, pw: float) -> rl.Rectangle:
+  def _3d_toggle_hit_rect(self, px: float, py: float, pw: float, compass_size: float = 116) -> rl.Rectangle:
     """右上角 2D/3D 切换按钮的矩形。绘制和 hit_test 共用此函数返回的同一 rect。
-    两种状态固定 110x110、同一位置——切换 2D/3D 时按钮原地不动。"""
+    两种状态固定 110x110、同一位置——切换 2D/3D 时按钮原地不动。
+    垂直位置跟随罗盘：罗盘放大后按钮自动下移让位。"""
     size = 110
     pad_x = 24
-    pad_y = 166  # 避开 road name card (高 128 + pad 24)
+    pad_y = 20 + compass_size + 16  # 罗盘顶距 20 + 罗盘直径 + 16px 间距
     return rl.Rectangle(px + pw - size - pad_x, py + pad_y, size, size)
 
   def _load_3d_icons(self):
@@ -729,8 +753,8 @@ class MapPanel:
       return cx + r * math.sin(rad), cy - r * math.cos(rad)
 
     # 顶部固定读数指标（不随盘面旋转）
-    rl.draw_triangle(rl.Vector2(cx - 7, cy - R - 13), rl.Vector2(cx + 7, cy - R - 13),
-                     rl.Vector2(cx, cy - R + 1), TEXT)
+    rl.draw_triangle(rl.Vector2(cx - 10, cy - R - 16), rl.Vector2(cx + 10, cy - R - 16),
+                     rl.Vector2(cx, cy - R + 2), TEXT)
     # ---- 渐变扇面：2° 切片，角度剖面 (1-|t|/HA)^1.6，内/外两段半径带 ----
     rf = R - (14 if compact else 22)
     step = 2.0
@@ -771,19 +795,19 @@ class MapPanel:
     for deg in range(0, 360, 15):
       w = max(0.0, 1 - abs(self._ang_diff(deg - disc_brg, fan_phi)) / _COMPASS_TICK_ZONE) ** 1.2
       if deg % 90 == 0:
-        base_c, ln, wd = TEXT, (8 if compact else 15), 3
+        base_c, ln, wd = TEXT, (12 if compact else 22), 4
       elif deg % 45 == 0:
-        base_c, ln, wd = COMPASS_TICK45, (6 if compact else 10), 2
+        base_c, ln, wd = COMPASS_TICK45, (9 if compact else 15), 3
       else:
-        base_c, ln, wd = COMPASS_TICK15, (4 if compact else 6), 1.5
+        base_c, ln, wd = COMPASS_TICK15, (6 if compact else 9), 2
       col = self._clerp(base_c, COMPASS_HI, 0.85 * w)
       a = math.radians(deg - disc_brg)
       x1, y1 = cx + R * math.sin(a), cy - R * math.cos(a)
       x2, y2 = cx + (R - ln) * math.sin(a), cy - (R - ln) * math.cos(a)
       rl.draw_line_ex(rl.Vector2(x1, y1), rl.Vector2(x2, y2), wd, col)
     # ---- 字母：转入扇面放大+变蓝，转出恢复 ----
-    r_letter = R * 0.70 if compact else R - 30
-    base_px = 17 if compact else 26
+    r_letter = R * 0.68 if compact else R * 0.62
+    base_px = 25 if compact else 38
     font = font_fallback(self._font_bold)
     for deg, ch in ((0, "N"), (90, "E"), (180, "S"), (270, "W")):
       w = max(0.0, 1 - abs(self._ang_diff(deg - disc_brg, fan_phi)) / _COMPASS_LETTER_ZONE) ** 1.3
@@ -795,7 +819,7 @@ class MapPanel:
       m = rl.measure_text_ex(font, ch, fs, 0)
       rl.draw_text_ex(font, ch, rl.Vector2(lx - m.x / 2, ly - m.y / 2), fs, 0, col)
     # 扇面顶点圆点
-    rl.draw_circle(int(cx), int(cy), 4, COMPASS_DOT)
+    rl.draw_circle(int(cx), int(cy), 5.5, COMPASS_DOT)
 
   def hit_test(self, x: float, y: float) -> bool:
     """点 (x,y) 是否落在面板交互区（mode!=0 时为整个 content rect；mode=0 时为 nav icon 圆）。
