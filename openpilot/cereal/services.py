@@ -93,6 +93,14 @@ _services: dict[str, tuple] = {
   "livestreamNarrowRoadEncodeData": (False, 20., None, QueueSize.MEDIUM),
   "livestreamCabinEncodeData": (False, 20., None, QueueSize.MEDIUM),
   "customReservedRawData0": (True, 0.),
+
+  # mapd / SCC-X (mapd 功能说明书 v0.7): full qlog retention for road-test analysis
+  "mapdOut": (True, 20., 10, QueueSize.MEDIUM),
+  "mapdExtendedOut": (True, 1., 1, QueueSize.MEDIUM),
+  "mapdIn": (False, 0., None, QueueSize.MEDIUM),
+  "sccXState": (True, 20., 10),
+  "mapRenderCam": (False, 10., 1),
+  "mapRenderFrame": (False, 15., None, QueueSize.BIG),
 }
 SERVICE_LIST = {name: Service(*vals) for
                 idx, (name, vals) in enumerate(_services.items())}
