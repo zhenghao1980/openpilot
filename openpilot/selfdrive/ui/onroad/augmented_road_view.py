@@ -14,6 +14,8 @@ from openpilot.selfdrive.ui.onroad.sp_turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.onroad.sp_developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
 from openpilot.selfdrive.ui.onroad.sp_torque_bar import TorqueBar
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
+from openpilot.selfdrive.ui.onroad.sp_map_panel import MapPanel, PANEL_W_FRAC
+from openpilot.selfdrive.ui.onroad.sp_speed_limit import SpeedLimitRenderer
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -62,9 +64,13 @@ class AugmentedRoadView(CameraView):
     self._sp_turn_signals = TurnSignalController()
     self._sp_developer_ui = DeveloperUiRenderer()
     self._sp_torque_bar = TorqueBar(scale=3.0, always=True)
+    # mapd map panel (v0.7 debug)
+    self._map_panel = MapPanel()
+    # mapd road speed limit sign (right of the set speed box)
+    self._sp_speed_limit = SpeedLimitRenderer()
 
   def _render(self, rect):
-    # Only render when system is started to avoid invalid data access
+    # Only render when system is started to avoid invalid data
     if not ui_state.started:
       return
 
@@ -81,49 +87,91 @@ class AugmentedRoadView(CameraView):
       rect.height - 2 * UI_BORDER_SIZE,
     )
 
+    # 半屏地图 (mode 1): 行车画面 + HUD 缩到左半边 (1-PANEL_W_FRAC)，右半边留给地图。
+    # 地图 panel 仍拿完整 _content_rect——它内部按全宽算右半区域，保证两边无缝衔接。
+    view_rect = self._content_rect
+    if ui_state.map_panel_mode == 1:
+      view_rect = rl.Rectangle(
+        self._content_rect.x,
+        self._content_rect.y,
+        self._content_rect.width * (1.0 - PANEL_W_FRAC),
+        self._content_rect.height,
+      )
+
     # Enable scissor mode to clip all rendering within content rectangle boundaries
     # This creates a rendering viewport that prevents graphics from drawing outside the border
+    rl.begin_scissor_mode(
+      int(view_rect.x),
+      int(view_rect.y),
+      int(view_rect.width),
+      int(view_rect.height)
+    )
+
+    # Render the base camera view
+    super()._render(view_rect)
+
+    # Draw all UI overlays
+    self.model_renderer.render(view_rect)
+    self._hud_renderer.render(view_rect)
+    self.driver_state_renderer.render(view_rect)
+
+    # Custom UI extension point - add custom overlays here
+    # Use view_rect for positioning within camera bounds
+    # SP overlays: speed + rocket fuel (Batch 1)
+    self._sp_speed.update()
+    self._sp_speed.render(view_rect)
+    self._sp_speed_limit.update()
+    self._sp_speed_limit.render(view_rect)
+    self._sp_rocket_fuel.render(view_rect, ui_state.sm)
+    self._sp_turn_signals.update()
+    self._sp_turn_signals.render(view_rect)
+    if ui_state.torque_bar:
+      _tq_rect = view_rect
+      if ui_state.developer_ui in (DeveloperUiState.BOTTOM, DeveloperUiState.BOTH):
+        _tq_rect = rl.Rectangle(view_rect.x, view_rect.y,
+                                view_rect.width, view_rect.height - get_bottom_dev_ui_offset())
+      self._sp_torque_bar.render(_tq_rect)
+    self._sp_developer_ui.render(view_rect)
+
+    # End clipping region
+    rl.end_scissor_mode()
+
+    # mapd map panel: 必须画在行车画面裁剪区之外——半屏模式下面板占右半边，
+    # 若仍在 view_rect 的 scissor 内渲染会被整体裁掉（黑屏）。
     rl.begin_scissor_mode(
       int(self._content_rect.x),
       int(self._content_rect.y),
       int(self._content_rect.width),
       int(self._content_rect.height)
     )
+    self._map_panel.update(ui_state.sm)
+    self._map_panel.render(self._content_rect)
+    rl.end_scissor_mode()
 
-    # Render the base camera view
-    super()._render(self._content_rect)
-
-    # Draw all UI overlays
-    self.model_renderer.render(self._content_rect)
-    self._hud_renderer.render(self._content_rect)
+    # 2026-10-13: 告警保持全屏尺寸——半屏地图下不随行车画面缩到左半边。
+    # FULL 告警与横幅都用完整 content rect 绘制（与全屏地图模式行为一致），
+    # 且在地图面板之后绘制，关键告警永远压在所有内容之上。
+    rl.begin_scissor_mode(
+      int(self._content_rect.x),
+      int(self._content_rect.y),
+      int(self._content_rect.width),
+      int(self._content_rect.height)
+    )
     self.alert_renderer.render(self._content_rect)
-    self.driver_state_renderer.render(self._content_rect)
-
-    # Custom UI extension point - add custom overlays here
-    # Use self._content_rect for positioning within camera bounds
-    # SP overlays: speed + rocket fuel (Batch 1)
-    self._sp_speed.update()
-    self._sp_speed.render(self._content_rect)
-    self._sp_rocket_fuel.render(self._content_rect, ui_state.sm)
-    self._sp_turn_signals.update()
-    self._sp_turn_signals.render(self._content_rect)
-    if ui_state.torque_bar:
-      _tq_rect = self._content_rect
-      if ui_state.developer_ui in (DeveloperUiState.BOTTOM, DeveloperUiState.BOTH):
-        _tq_rect = rl.Rectangle(self._content_rect.x, self._content_rect.y,
-                                self._content_rect.width, self._content_rect.height - get_bottom_dev_ui_offset())
-      self._sp_torque_bar.render(_tq_rect)
-    self._sp_developer_ui.render(self._content_rect)
-
-    # End clipping region
     rl.end_scissor_mode()
 
     # Draw colored border based on driving state
     self._draw_border(rect)
 
-  def _handle_mouse_press(self, _):
-    if not self._hud_renderer.user_interacting() and self._click_callback is not None:
-      self._click_callback()
+  def _handle_mouse_press(self, mouse_pos):
+    if not self._hud_renderer.user_interacting():
+      # 地图 panel 触摸路由已由 sp_map_panel._poll_taps 自轮询接管 (见 handle_tap 内 hit_test)。
+      # 点在面板区域（含隐藏时的 nav icon）时不得再触发边栏回调，否则每次点地图
+      # 都会同时切边栏、布局跳动，导致面板按钮/切换失灵。
+      if self._map_panel.hit_test(mouse_pos.x, mouse_pos.y):
+        return
+      if self._click_callback is not None:
+        self._click_callback()
 
   def _handle_mouse_release(self, _):
     # We only call click callback on press if not interacting with HUD
@@ -177,11 +225,16 @@ class AugmentedRoadView(CameraView):
       self.view_from_wide_calib = view_frame_from_device_frame @ wide_from_device @ device_from_calib
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
-    # Check if we can use cached matrix
+    # Check if we can use cached matrix.
+    # 必须用传入的 rect（半屏模式=左半 view_rect）而不是 _content_rect：
+    # 视频绘制、缩放、模型叠加 transform 全部以 rect 为准，否则半屏时叠加层
+    # 仍按全屏坐标绘制，与压缩后的行车画面错位。
     cache_key = (
       ui_state.sm.recv_frame['extrinsicsCalibration'],
-      self._content_rect.width,
-      self._content_rect.height,
+      rect.width,
+      rect.height,
+      rect.x,
+      rect.y,
       self.stream_type
     )
     if cache_key == self._matrix_cache_key and self._cached_matrix is not None:
@@ -199,8 +252,8 @@ class AugmentedRoadView(CameraView):
     kep = calib_transform @ INF_POINT
 
     # Calculate center points and dimensions
-    x, y = self._content_rect.x, self._content_rect.y
-    w, h = self._content_rect.width, self._content_rect.height
+    x, y = rect.x, rect.y
+    w, h = rect.width, rect.height
     cx, cy = intrinsic[0, 2], intrinsic[1, 2]
 
     # Ensure zoom views the whole area
